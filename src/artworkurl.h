@@ -30,6 +30,17 @@ inline bool plainHttps(const QUrl &url) {
   return url.scheme() == "https" && !url.hasQuery() && !url.hasFragment() && url.userInfo().isEmpty();
 }
 
+// The cover handed to the desktop over MPRIS. A local poster carries
+// ?v=<mtime>:<size> so Qt's image cache lets go of it when its source
+// changes, but the MPRIS metadata specification defines mpris:artUrl only as
+// a URI, and shells such as Noctalia 5.2 make a path of a file URI by cutting
+// the scheme, so the query becomes part of the file name and the cover never
+// loads. Local files go out as the plain file; a remote host keeps its query,
+// which may be what serves the image.
+inline QUrl forDesktop(const QUrl &url) {
+  return url.isLocalFile() ? QUrl::fromLocalFile(url.toLocalFile()) : url;
+}
+
 // A cover on Apple's image service in the form its search API returns it: an
 // isN-ssl.mzstatic.com host whose last path segment names the size.
 inline bool isAppleCover(const QUrl &url) {

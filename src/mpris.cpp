@@ -1,4 +1,5 @@
 #include "mpris.h"
+#include "artworkurl.h"
 #include <QCoreApplication>
 #include <QDBusConnection>
 #include <QDBusMessage>
@@ -17,7 +18,7 @@ QVariantMap PlayerAdaptor::metadata() const {
                                 "/org/mpris/MediaPlayer2/track/" +
                                 b->trackToken()))},
           {"mpris:length", b->duration() * 1000},
-          {"mpris:artUrl", isServerSource(t.value("source"))?QVariant(b->serverArtwork()):QVariant(b->displayArt(t))},
+          {"mpris:artUrl", isServerSource(t.value("source"))?QVariant(b->serverArtwork()):QVariant(artworkurl::forDesktop(QUrl(b->displayArt(t))).toString())},
           {"xesam:title", t.value("title")},
           {"xesam:artist", QStringList{t.value("artist").toString()}},
           {"xesam:album", t.value("album")},
