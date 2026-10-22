@@ -21,7 +21,8 @@
 !/qml/*.qml
 /helper/*
 !/helper/catalog.py
-!/helper/online_artwork.py
+!/helper/qqmusic.py
+!/helper/qqmusic_login.py
 !/helper/requirements.txt
 /scripts/*
 !/scripts/*.sh

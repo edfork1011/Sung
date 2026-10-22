@@ -340,7 +340,7 @@ ListView {
             if(!compatible())return;
             const at=list.insertion(event.y);
             const hub=list.dragHub;
-            if(hub.owner===list){if(list.queueMode)app.moveQueueRows(hub.rows,at);else if(app.serverPlaylistEditable)app.moveServerRows(hub.rows,at);else app.movePlaylistRows(list.playlistId,hub.rows,at);}
+            if(hub.owner===list){if(list.queueMode)app.moveQueueRows(hub.rows,at);else app.movePlaylistRows(list.playlistId,hub.rows,at);}
             else if(list.queueMode)app.enqueueItems(hub.items,false,at);
             event.acceptProposedAction();before=-1;
         }

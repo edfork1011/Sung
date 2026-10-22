@@ -571,8 +571,8 @@ Item {
         // Menu.kt:324-347 gives an item an optional leading icon. Material
         // Symbols' "speed" names this action; the history glyph it once wore
         // named a different one.
-        // Cider plays at its own speed; the control would promise what it cannot do.
-        MMenuItem {objectName:"immersiveSpeed";symbol:"speed";text:"Playback speed · "+Number(app.playbackRate.toFixed(2))+"×";enabled:!app.externalPlayback;onTriggered:player.speedRequested()}
+        // Playback speed applies to both local and QQ Music audio.
+        MMenuItem {objectName:"immersiveSpeed";symbol:"speed";text:"Playback speed · "+Number(app.playbackRate.toFixed(2))+"×";enabled:!false;onTriggered:player.speedRequested()}
         MMenuItem {objectName:"immersiveTiming";symbol:"settings";text:"Lyric timing";enabled:app.lyricLines.length>0;onTriggered:player.timingRequested()}
         MDivider {}
         // Only Motion draws lyrics over its picture, so only there is this

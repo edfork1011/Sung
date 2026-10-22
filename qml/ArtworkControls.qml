@@ -42,11 +42,9 @@ MDialog {
                         MChip {objectName:"artworkFit";text:"Fit";selected:app.currentArtworkFit;onClicked:app.currentArtworkFit=true}
                     }
                     SungText { Layout.fillWidth: true; Layout.preferredHeight: 40; text: app.artworkStatus; wrapMode: Text.Wrap; horizontalAlignment: Text.AlignHCenter; color: Theme.muted }
-                    MButton { Layout.fillWidth: true; Layout.preferredHeight: 40; text: "View source album"; visible: !!app.artworkPage; onClicked: Qt.openUrlExternally(app.artworkPage) }
-                    MButton { objectName: "retryArtworkButton"; Layout.fillWidth: true; Layout.preferredHeight: 40; text: "Find cover again"; enabled: !!app.current.videoId; onClicked: app.retryArtwork() }
                     MButton { objectName: "chooseArtworkButton"; tonal: true; Layout.fillWidth: true; Layout.preferredHeight: 40; text: "Choose local animation…"; onClicked: dialog.chooseFile() }
                     MButton { objectName: "rejectArtworkButton"; Layout.fillWidth: true; Layout.preferredHeight: 40; text: "Disable for this song"; enabled: !!app.currentMotionArt; onClicked: app.rejectArtwork() }
-                    MButton { objectName: "resetArtworkButton"; Layout.fillWidth: true; Layout.preferredHeight: 40; text: "Use automatic cover"; onClicked: app.resetArtworkChoice() }
+                    MButton { objectName: "resetArtworkButton"; Layout.fillWidth: true; Layout.preferredHeight: 40; text: "Use track cover"; onClicked: app.resetArtworkChoice() }
                 }
             }
         }

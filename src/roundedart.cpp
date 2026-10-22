@@ -22,8 +22,6 @@
 #include <QtConcurrentRun>
 #include <utility>
 
-std::function<QNetworkRequest(const QUrl &)> RoundedArt::resolveServerArt;
-std::function<QUrl(const QUrl &)> RoundedArt::resolveVideoFrame;
 static QCache<QString, QImage> cache(8 * 1024 * 1024);
 // Accessed only on the GUI thread. Views requesting the same local cover
 // subscribe to one decode; QImage then shares its pixels without copying.
@@ -213,21 +211,10 @@ void RoundedArt::reload(bool preserve) {
     }));
     return;
   }
-  const bool server=m_source.scheme()=="sungcover";
-  QNetworkRequest serverRequest=server&&resolveServerArt?resolveServerArt(m_source):QNetworkRequest();
-  QUrl url=server?serverRequest.url():m_source;
-  // Ask the image service for the size this surface draws rather than the
-  // thumbnail the catalogue handed out. A request that fails is retried once
-  // with the source untouched, which is also how a missing HD frame degrades.
-  if(!m_originalSizeFallback && !server){
-    if(resolveVideoFrame && !artworkurl::videoId(url).isEmpty()){const auto cover=resolveVideoFrame(url);if(!cover.isEmpty())url=cover;}
-    url=artworkurl::sized(url,m_pixels);
-  }
-  if(url.isEmpty() || (url.scheme()!="https" && !(server&&url.scheme()=="http"))){finishTransition();return;}
-  QNetworkRequest req=server?serverRequest:QNetworkRequest(url);
-  if(server){req.setAttribute(QNetworkRequest::RedirectPolicyAttribute,QNetworkRequest::ManualRedirectPolicy);req.setAttribute(QNetworkRequest::CacheSaveControlAttribute,false);}
-  req.setAttribute(QNetworkRequest::CacheLoadControlAttribute,
-                   server?QNetworkRequest::AlwaysNetwork:QNetworkRequest::PreferCache);
+  const QUrl url=m_originalSizeFallback?m_source:artworkurl::sized(m_source,m_pixels);
+  if(!artworkurl::isQQMusic(url)){finishTransition();return;}
+  QNetworkRequest req(url);
+  req.setAttribute(QNetworkRequest::CacheLoadControlAttribute,QNetworkRequest::PreferCache);
   auto r = manager()->get(req);
   m_reply = r;
   connect(r, &QNetworkReply::downloadProgress, this,
@@ -235,7 +222,7 @@ void RoundedArt::reload(bool preserve) {
             if (got > 4 * 1024 * 1024 || total > 4 * 1024 * 1024)
               r->abort();
           });
-  connect(r, &QNetworkReply::finished, this, [this, r, key, resized=(url!=m_source && !server)] {
+  connect(r, &QNetworkReply::finished, this, [this, r, key, resized=(url!=m_source)] {
     if (m_reply != r) {
       r->deleteLater();
       return;
@@ -361,9 +348,7 @@ void RoundedArt::clearCaches() {
   // Clearing local data must not start the network stack as a side effect.
   if(artNetwork && artNetwork->cache())artNetwork->cache()->clear();
 }
-void RoundedArt::refreshFrames() {
-  for(auto *art:std::as_const(liveArt()))if(!artworkurl::videoId(art->m_source).isEmpty())art->refresh();
-}
+
 // The source is the same; what it stands for is not. Drop the decoded copy
 // so the reload cannot answer from memory, and keep the old picture up, as a
 // crossfade origin where there is one, until the new one arrives.

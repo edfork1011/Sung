@@ -19,10 +19,12 @@ Window {
     TrackPresentation { id: presentation }
     signal restoreRequested()
     Component.onCompleted: windowResources.manage(mini)
-    onClosing: Qt.quit()
+    onClosing: close => {
+        if(desktopIntegration.keepInBackground()){close.accepted=false;mini.hide();}
+        else Qt.quit();
+    }
     Shortcut { sequence: "Ctrl+M"; onActivated: mini.restoreRequested() }
     Shortcut { sequence: "Escape"; enabled:!miniVolume.popupVisible;onActivated: mini.restoreRequested() }
-    Shortcut { sequence: "Ctrl+Q"; onActivated: Qt.quit() }
     Shortcut { sequence: "Space"; enabled:!miniVolume.popupVisible;onActivated: app.toggle() }
     Shortcut { sequence: "Ctrl+Right"; onActivated: app.next() }
     Shortcut { sequence: "Ctrl+Left"; onActivated: app.previous() }
@@ -48,7 +50,7 @@ Window {
                 }
                 MButton { objectName: "miniPinButton"; symbol: "pin"; toggle: true; selected: app.miniPinned; visible: app.canPinWindows; tip: app.miniPinned?"Let other windows cover this":"Keep above other windows"; onClicked: app.miniPinned=!app.miniPinned }
                 MButton { objectName: "miniRestoreButton"; symbol: "expand"; tip: "Full player · Ctrl+M"; onClicked: mini.restoreRequested() }
-                MButton { symbol: "close"; tip: "Quit Sung"; onClicked: Qt.quit() }
+                MButton { objectName:"miniCloseButton"; symbol: "close"; tip: "Close player"; onClicked: mini.close() }
             }
             Item {
                 id: lyricLine; objectName:"miniLyricContainer"

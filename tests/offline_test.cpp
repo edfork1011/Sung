@@ -55,25 +55,21 @@ private slots:
 
   // What a song is filed under, and what is never filed at all.
   void whatIsKeptAndUnderWhatName() {
-    const QVariantMap imported{{"localPath", "/music/song.flac"}, {"videoId", "abc"}};
+    const QVariantMap imported{{"localPath", "/music/song.flac"}, {"source","qqmusic"},{"remoteId", "abc"}};
     QVERIFY2(OfflineStore::keyFor(imported, "standard").isEmpty(),
              "a file already on disk is not kept a second time");
     QVERIFY2(OfflineStore::keyFor({{"title", "Nothing"}}, "standard").isEmpty(),
              "a song with nothing to fetch it by has no key");
 
-    const QVariantMap track{{"videoId", "abc"}};
+    const QVariantMap track{{"source","qqmusic"},{"remoteId", "abc"}};
     QVERIFY(!OfflineStore::keyFor(track, "standard").isEmpty());
-    QVERIFY2(OfflineStore::keyFor(track, "standard") != OfflineStore::keyFor(track, "saver"),
-             "the quality it was fetched at is part of the name");
-    QVERIFY2(OfflineStore::keyFor(track, "standard") != OfflineStore::keyFor({{"videoId", "abd"}}, "standard"),
+    QVERIFY2(OfflineStore::keyFor(track, "standard") == OfflineStore::keyFor(track, "saver"),
+             "QQ Music uses its authorized MP3 quality for every cache key");
+    QVERIFY2(OfflineStore::keyFor(track, "standard") != OfflineStore::keyFor({{"source","qqmusic"},{"remoteId", "abd"}}, "standard"),
              "two songs are two keys");
 
-    const QVariantMap onServer{{"source", "subsonic"}, {"server", "https://one"}, {"id", "7"}};
-    const QVariantMap elsewhere{{"source", "subsonic"}, {"server", "https://two"}, {"id", "7"}};
-    QVERIFY2(OfflineStore::keyFor(onServer, "320") != OfflineStore::keyFor(elsewhere, "320"),
-             "one track id on two servers says nothing about either");
-    QVERIFY2(OfflineStore::keyFor({{"source", "subsonic"}, {"id", "7"}}, "320").isEmpty(),
-             "a server track with no server is not kept");
+    QVERIFY(OfflineStore::keyFor({{"source","unsupported"},{"id","7"}},"mp3_128").isEmpty());
+
   }
 
   // A kept song is found again, and the buffer it came from is gone: the file
@@ -81,7 +77,7 @@ private slots:
   void aKeptSongIsFoundAgain() {
     OfflineStore store;
     store.setBudget(4 * 1024 * 1024);
-    const auto key = OfflineStore::keyFor({{"videoId", "abc"}}, "standard");
+    const auto key = OfflineStore::keyFor({{"source","qqmusic"},{"remoteId", "abc"}}, "standard");
     QVERIFY(store.take(key).isEmpty());
     QVERIFY(!store.has(key));
 
@@ -106,7 +102,7 @@ private slots:
   void turningItOffKeepsNothingAndGivesBackTheDisk() {
     OfflineStore store;
     store.setBudget(0);
-    const auto key = OfflineStore::keyFor({{"videoId", "off"}}, "standard");
+    const auto key = OfflineStore::keyFor({{"source","qqmusic"},{"remoteId", "off"}}, "standard");
     QVERIFY(store.keep(key, buffered("off.opus", 1024)).isEmpty());
     QVERIFY(store.take(key).isEmpty());
 
@@ -124,7 +120,7 @@ private slots:
     store.setBudget(1024 * 1024);
     QStringList kept;
     for (int i = 0; i < 4; ++i) {
-      const auto key = OfflineStore::keyFor({{"videoId", QString("song%1").arg(i)}}, "standard");
+      const auto key = OfflineStore::keyFor({{"source","qqmusic"},{"remoteId", QString("song%1").arg(i)}}, "standard");
       const auto path = store.keep(key, buffered(QString("song%1.opus").arg(i), 200 * 1024));
       QVERIFY(!path.isEmpty());
       kept << path;
@@ -133,14 +129,14 @@ private slots:
     QCOMPARE(store.count(), 4);
 
     // Playing the oldest one makes it the newest.
-    const auto oldest = OfflineStore::keyFor({{"videoId", "song0"}}, "standard");
+    const auto oldest = OfflineStore::keyFor({{"source","qqmusic"},{"remoteId", "song0"}}, "standard");
     QCOMPARE(store.take(oldest), kept.at(0));
 
     // Room for two: the one just played stays, the next-oldest goes.
     store.setBudget(450 * 1024);
     QCOMPARE(store.count(), 2);
     QVERIFY2(store.has(oldest), "the song just played survived the squeeze");
-    QVERIFY2(!store.has(OfflineStore::keyFor({{"videoId", "song1"}}, "standard")),
+    QVERIFY2(!store.has(OfflineStore::keyFor({{"source","qqmusic"},{"remoteId", "song1"}}, "standard")),
              "the least recently played went first");
     QVERIFY(store.bytes() <= 450 * 1024);
   }
@@ -150,9 +146,9 @@ private slots:
   void aSongLargerThanTheBudgetIsNotKept() {
     OfflineStore store;
     store.setBudget(100 * 1024);
-    const auto small = OfflineStore::keyFor({{"videoId", "small"}}, "standard");
+    const auto small = OfflineStore::keyFor({{"source","qqmusic"},{"remoteId", "small"}}, "standard");
     QVERIFY(!store.keep(small, buffered("small.opus", 40 * 1024)).isEmpty());
-    const auto huge = OfflineStore::keyFor({{"videoId", "huge"}}, "standard");
+    const auto huge = OfflineStore::keyFor({{"source","qqmusic"},{"remoteId", "huge"}}, "standard");
     const auto source = buffered("huge.opus", 400 * 1024);
     QVERIFY(store.keep(huge, source).isEmpty());
     QVERIFY2(QFile::exists(source), "the caller still has the file it was about to play");
@@ -164,7 +160,7 @@ private slots:
   void aCopyThatWillNotPlayIsDropped() {
     OfflineStore store;
     store.setBudget(1024 * 1024);
-    const auto key = OfflineStore::keyFor({{"videoId", "broken"}}, "standard");
+    const auto key = OfflineStore::keyFor({{"source","qqmusic"},{"remoteId", "broken"}}, "standard");
     QVERIFY(!store.keep(key, buffered("broken.opus", 4096)).isEmpty());
     QVERIFY(store.has(key));
     store.forget(key);
@@ -180,7 +176,7 @@ private slots:
   // nothing left to fetch it. Removing the keeping fails this case.
   void aSongPlayedOncePlaysAgainWithNothingToFetchIt() {
     qputenv("SUNG_BUFFER_FIXTURE", "1");
-    const QVariantMap song{{"id", "00000000001"}, {"videoId", "00000000001"},
+    const QVariantMap song{{"id", "00000000001"}, {"source","qqmusic"},{"remoteId", "00000000001"},
                            {"title", "Track 1"},  {"kind", "song"},
                            {"artist", "Test artist"}, {"seconds", 120},
                            {"available", true}};
@@ -188,10 +184,10 @@ private slots:
     {
       Backend b;
       b.setVolume(0);
-      b.setLyricsFallback(false);
+
       b.setAutoplay(false);
       b.setWatchMusicFolders(false);
-      b.setOnlineArtwork(false);
+
       b.setPrepareNext(false);
       b.setKeepPlayedMb(64);
       b.clearQueue();
@@ -203,7 +199,7 @@ private slots:
       store.setBudget(64 * 1024 * 1024);
       QVERIFY2(first.startsWith(store.root()),
                qPrintable("played from " + first + ", not from " + store.root()));
-      QVERIFY2(store.has(OfflineStore::keyFor(song, b.streamingQuality())),
+      QVERIFY2(store.has(OfflineStore::keyFor(song, QString("mp3_128"))),
                "the song is in the store under the key the player will look for");
       b.stop();
     }
@@ -214,10 +210,10 @@ private slots:
     {
       Backend b;
       b.setVolume(0);
-      b.setLyricsFallback(false);
+
       b.setAutoplay(false);
       b.setWatchMusicFolders(false);
-      b.setOnlineArtwork(false);
+
       b.setPrepareNext(false);
       b.clearQueue();
       b.enqueueItems({song});
@@ -235,7 +231,7 @@ private slots:
       b.setKeepPlayedMb(0);
       OfflineStore store;
       store.setBudget(64 * 1024 * 1024);
-      QVERIFY(!store.has(OfflineStore::keyFor(song, b.streamingQuality())));
+      QVERIFY(!store.has(OfflineStore::keyFor(song, QString("mp3_128"))));
       b.setKeepPlayedMb(1024);
     }
   }

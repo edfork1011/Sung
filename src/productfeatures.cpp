@@ -12,7 +12,7 @@
 #include <limits>
 
 QVariantMap Backend::albumInfo() const {
-  if(m_page!="album" && m_page!="local-album" && !(m_page=="server" && m_request.value("mode")=="album"))return {};
+  if(m_page!="album" && m_page!="local-album")return {};
   QString artist=m_request.value("artist").toString();
   if(artist.isEmpty() && !m_results.rows.isEmpty())artist=m_results.get(0).value("artist").toString();
   qint64 seconds=0;bool complete=true;QSet<int> discs;
@@ -28,8 +28,7 @@ QVariantMap Backend::albumInfo() const {
 }
 
 QVariantMap Backend::artistInfo() const {
-  const bool serverArtist=m_page=="server" && m_request.value("mode")=="artist";
-  if(m_page!="artist" && m_page!="local-artist" && !serverArtist)return {};
+  if(m_page!="artist" && m_page!="local-artist")return {};
   QSet<QString> albums;qint64 seconds=0;bool complete=!m_results.rows.isEmpty();
   for(const auto &v:m_results.rows){const auto t=v.toMap();
     const auto album=t.value("album").toString();
@@ -53,59 +52,27 @@ QString Backend::artworkChoice() const {return m_settings.value("artworkChoices"
 QString Backend::currentMotionArt() const {
   const auto choice=artworkChoice();if(choice=="disabled")return {};
   if(!choice.isEmpty()){const QUrl url(choice);if(url.isLocalFile() && QFileInfo::exists(url.toLocalFile()))return choice;return {};}
-  const auto local=current().value("motionArt").toString();return local.isEmpty()?m_onlineMotionArt:local;
+  const auto local=current().value("motionArt").toString();return QUrl(local).isLocalFile()?local:QString();
 }
 QString Backend::artworkStatus() const {
   if(artworkChoice()=="disabled")return "Animation disabled for this song";
   if(!artworkChoice().isEmpty())return currentMotionArt().isEmpty()?"Selected cover is missing":"Your selected cover";
   if(!current().value("motionArt").toString().isEmpty())return "Local animated cover";
   if(!motion() || !animatedArtwork())return "Enable animations in Settings";
-  if(!onlineArtwork())return "Online covers disabled";
-  if(!m_artworkStatus.isEmpty())return m_artworkStatus;
-  return current().value("videoId").toString().isEmpty()?"Choose a local animated cover":"Play this song to look for a cover";
+  return "Choose a local animated cover";
 }
 void Backend::saveArtworkChoice(const QString &value){
   const auto id=current().value("id").toString();if(id.isEmpty())return;
   auto choices=m_settings.value("artworkChoices").toMap();
   if(value.isEmpty())choices.remove(id);else {if(choices.size()>=1000 && !choices.contains(id)){emit toast("Artwork choice limit reached");return;}choices[id]=value;}
-  m_settings.setValue("artworkChoices",choices);updateOnlineArtwork();emit onlineArtworkChanged();
+  m_settings.setValue("artworkChoices",choices);emit artworkChanged();
 }
 void Backend::rejectArtwork(){saveArtworkChoice("disabled");}
-void Backend::resetArtworkChoice(){saveArtworkChoice({});m_onlineArtworkAttempted=false;m_onlineArtworkRetries=0;updateOnlineArtwork();}
-void Backend::retryArtwork(){
-  if(current().value("videoId").toString().isEmpty())return;
-  forgetVideoCover(current().value("videoId").toString());
-  resetArtworkChoice();m_artworkForce=true;
-  if(playing())updateOnlineArtwork();
-}
-// Covers found for video frames are kept by video id, so every surface that
-// draws the frame can swap the cover in without a lookup of its own. An empty
-// entry records that nothing matched; "Find cover again" clears it. The map
-// is a cache with a ceiling, not a library: past 2,000 songs it starts over
-// and refills one song at a time as they play.
-void Backend::rememberVideoCover(const QString &videoId,const QString &cover){
-  if(videoId.isEmpty())return;
-  if(m_videoCovers.contains(videoId) && m_videoCovers.value(videoId).toString()==cover)return;
-  if(m_videoCovers.size()>=2000 && !m_videoCovers.contains(videoId))m_videoCovers.clear();
-  m_videoCovers[videoId]=cover;m_settings.setValue("videoCovers",m_videoCovers);emit videoCoversChanged();
-}
-void Backend::forgetVideoCover(const QString &videoId){
-  if(!m_videoCovers.contains(videoId))return;
-  m_videoCovers.remove(videoId);m_settings.setValue("videoCovers",m_videoCovers);emit videoCoversChanged();
-}
-void Backend::setAlbumCovers(bool value){
-  if(albumCovers()==value)return;
-  m_settings.setValue("albumCovers",value);emit settingsChanged();emit videoCoversChanged();
-}
-QUrl Backend::albumCoverFor(const QUrl &frame) const {
-  if(!albumCovers())return {};
-  const auto id=artworkurl::videoId(frame);if(id.isEmpty())return {};
-  const QUrl cover(m_videoCovers.value(id).toString());
-  return artworkurl::isAlbumCover(cover)?cover:QUrl();
-}
+void Backend::resetArtworkChoice(){saveArtworkChoice({});}
+
 QString Backend::displayArt(const QVariantMap &track) const {
-  const QUrl art(track.value("art").toString());const auto cover=albumCoverFor(art);
-  return artworkurl::sized(cover.isEmpty()?art:cover,600).toString();
+  const QUrl art(track.value("art").toString());
+  return art.isLocalFile() || artworkurl::isQQMusic(art) ? artworkurl::sized(art,600).toString() : QString();
 }
 void Backend::chooseArtwork(const QUrl &url,const QString &songId){
   if(songId.isEmpty() || songId!=current().value("id").toString() || !url.isLocalFile())return;
@@ -168,7 +135,7 @@ static QString localGroupKey(const QVariantMap &t,bool album) {
 }
 // Whether two tracks are parts of one album, which is what a transition has to
 // know before it blends them. The library's own grouping answers it: a
-// catalogue or server track by its album id, an imported file by the key the
+// QQ Music track by its album id, an imported file by the key the
 // local album browser files it under, so two records called "Greatest Hits" by
 // different artists stay apart.
 //
@@ -184,7 +151,7 @@ bool Backend::sameAlbum(const QVariantMap &a,const QVariantMap &b) {
   }
   const auto id=a.value("albumId").toString();
   return !id.isEmpty() && id==b.value("albumId").toString()
-      && a.value("source")==b.value("source") && a.value("server")==b.value("server");
+      && a.value("source")==b.value("source");
 }
 QVariantList Backend::localGroups(const QString &kind) const {
   const bool album=kind=="local-albums";QMap<QString,QVariantMap> groups;
@@ -230,7 +197,7 @@ QVariantMap Backend::relatedCollection(const QVariantMap &item,const QString &ki
   const auto id=item.value(kind+"Id").toString();
   if(id.isEmpty())return {};
   return {{"kind",kind},{"title",item.value(kind)},{"browseId",id},{"remoteId",id},
-          {"source",item.value("source")},{"server",item.value("server")},{"art",item.value("art")}};
+          {"source",item.value("source")},{"art",item.value("art")}};
 }
 void Backend::openLocalGroup(const QVariantMap &item){
   navigate(item.value("kind").toString(),item.value("title").toString(),true,item.value("id").toString());
@@ -284,7 +251,7 @@ void Backend::resetPlaylistCover(const QString &id){
 #include <QDateTime>
 static QString fitKey(const QVariantMap &t){
   const auto album=t.value("album").toString().trimmed();
-  const auto key=album.isEmpty()?t.value("id").toString():t.value("source").toString()+"|"+t.value("server").toString()+"|"+groupArtist(t).toCaseFolded()+"|"+album.toCaseFolded();
+  const auto key=album.isEmpty()?t.value("id").toString():t.value("source").toString()+"|"+groupArtist(t).toCaseFolded()+"|"+album.toCaseFolded();
   return QString::fromLatin1(QCryptographicHash::hash(key.toUtf8(),QCryptographicHash::Sha256).toHex());
 }
 bool Backend::artworkFits(const QVariantMap &t) const {return m_settings.value("artworkFit").toMap().value(fitKey(t),false).toBool();}
@@ -603,26 +570,3 @@ void Backend::clearPlaylistVersions(const QString &id) {
 // A song is announced as it starts, and reported as listened to once it has
 // played far enough to count. A private session reports nothing, the same way
 // it records nothing.
-
-void Backend::beginScrobble() {
-  m_scrobbleToken=m_trackToken;
-  m_scrobbleSent=false;
-  m_scrobbleStartedAt=QDateTime::currentSecsSinceEpoch();
-  m_scrobbleThreshold=-1;
-  if(m_historyPaused)return;
-  m_scrobbler.nowPlaying(current());
-}
-
-void Backend::considerScrobble() {
-  if(m_scrobbleSent || m_historyPaused || m_scrobbleToken!=m_trackToken || !playing())return;
-  if(m_scrobbleThreshold<0){
-    const auto total=duration();
-    if(total<=0)return;
-    m_scrobbleThreshold=Scrobbler::thresholdFor(total);
-    // A recording too short to count never will be.
-    if(m_scrobbleThreshold<0){m_scrobbleSent=true;return;}
-  }
-  if(position()<m_scrobbleThreshold)return;
-  m_scrobbleSent=true;
-  m_scrobbler.submit(current(),m_scrobbleStartedAt);
-}

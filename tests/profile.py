@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Measure an isolated, idle UI. Does not touch the running desktop player."""
-import json,os,pathlib,subprocess,sys,time
+import json,os,pathlib,subprocess,sys,time,tempfile
 binary=sys.argv[1]
-proc=subprocess.Popen([binary,'--isolated','--offline']+(['--mini'] if '--mini' in sys.argv else []),stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+profile=tempfile.TemporaryDirectory(prefix='sung-profile-')
+env=os.environ.copy();env.update(XDG_CONFIG_HOME=profile.name+'/config',XDG_DATA_HOME=profile.name+'/data',XDG_CACHE_HOME=profile.name+'/cache',SUNG_HELPER=str(pathlib.Path(__file__).resolve().with_name('catalog_fixture.py')),SUNG_PYTHON=sys.executable,QT_QPA_PLATFORM='offscreen',QT_QPA_PLATFORMTHEME='generic',QT_QUICK_BACKEND='software')
+proc=subprocess.Popen([binary,'--isolated']+(['--mini'] if '--mini' in sys.argv else []),env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
 try:
     time.sleep(2)
     if proc.poll() is not None:raise RuntimeError('UI exited during startup')
@@ -17,3 +19,4 @@ try:
     print(json.dumps({'workload':('isolated idle mini player' if '--mini' in sys.argv else 'isolated idle UI')+', offline, 5-second sample','cpu_percent_one_core':round(cpu,2),**memory,'binary_bytes':pathlib.Path(binary).stat().st_size},indent=2))
 finally:
     if proc.poll() is None:proc.terminate();proc.wait(timeout=5)
+    profile.cleanup()

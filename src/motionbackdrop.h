@@ -23,7 +23,7 @@ class MotionBackdrop : public QQuickItem {
   friend class ArtworkTest;
   Q_PROPERTY(MotionArtwork *animation READ animation WRITE setAnimation NOTIFY animationChanged)
   // What to draw without an animation. A hidden RoundedArt, so the still
-  // arrives through the same cache, network and video-frame lookup as every
+  // arrives through the same QQ Music cache and local artwork loader as every
   // other cover in the application.
   Q_PROPERTY(RoundedArt *still READ still WRITE setStill NOTIFY stillChanged)
   // How far the crossfade from the previous picture has got. Written from

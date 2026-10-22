@@ -10,6 +10,11 @@ ApplicationWindow {
     id: window
     objectName: "sungWindow"
     visible: true
+    onClosing: close => {
+        if(desktopIntegration.keepInBackground()){
+            close.accepted=false;window.hide();if(miniPlayer)miniPlayer.hide();
+        }else Qt.quit();
+    }
     width: 1180; height: 800
     minimumWidth: 480; minimumHeight: 580
     font.family: Theme.fontFamily
@@ -38,7 +43,7 @@ ApplicationWindow {
     // child is visible, holding a child whose visibility is its parent's, never
     // opens.
     readonly property bool libraryAddApplies: destination==="library" && !localPlaylist
-                                              && ["files","local-albums","local-artists","playlists"].indexOf(libraryTab)>=0
+                                              && ["files","local-albums","local-artists","local-playlists"].indexOf(libraryTab)>=0
     property var miniPlayer: null
     readonly property bool uiActive: (visible && visibility!==Window.Minimized) || (miniPlayer!==null && miniPlayer.visible && miniPlayer.visibility!==Window.Minimized)
     onUiActiveChanged: {app.setUiActive(uiActive);if(!uiActive){cancelCoverFlight();cancelAlbumFlight();}}
@@ -52,11 +57,11 @@ ApplicationWindow {
     property size motionWindow: Qt.size(width, height)
     // Restarted by onWidthChanged and onHeightChanged below.
     Timer { id: motionWindowSettle; interval: 600; onTriggered: window.motionWindow = Qt.size(window.width, window.height) }
-    // Apple's square cover or its 3:4 tall one, whichever is nearer the
+    // A square cover or its 3:4 tall variant, whichever is nearer the
     // window's shape: the two meet at the geometric mean of their aspects,
     // sqrt(4/3), where each would crop the same share of itself.
     readonly property bool motionTall: motionWindow.height > motionWindow.width*Math.sqrt(4/3)
-    // Apple's streams behind 1080p, 2K and 4K (helper/online_artwork.py):
+    // Decode caps for full-screen local animated covers:
     // their widths, and their longest sides for the decoder.
     readonly property var motionTiers: [1080, 1920, 2160]
     readonly property var motionWidths: motionTall ? [1078, 1662, 2048] : [1080, 1920, 2160]
@@ -71,7 +76,6 @@ ApplicationWindow {
     }
     readonly property int motionTier: app.motionQuality > 0 ? app.motionQuality : motionAutoTier
     Binding { target: motionArtwork; property: "maximumSize"; value: window.motionLayoutShown ? window.motionHeights[window.motionTiers.indexOf(window.motionTier)] : 800 }
-    Binding { target: app; property: "motionArtQuality"; value: window.motionLayoutShown ? (window.motionTall ? "tall" : "")+window.motionTier : "standard" }
     property var fileDialogs: null
     function openFileDialog(kind) {
         if(!fileDialogs) {
@@ -104,7 +108,7 @@ ApplicationWindow {
         }
         return "";
     }
-    property bool hasSongCollection: !window.feedShowing && app.results.count>0 && !!(app.results.get(0).videoId || app.results.get(0).localPath || app.results.get(0).serverSong)
+    property bool hasSongCollection: !window.feedShowing && app.results.count>0 && !!(app.results.get(0).localPath || app.results.get(0).qqMusicSong)
     property var bulkView: null
     property var batchItems: []
     property var menuItem: ({})
@@ -115,7 +119,6 @@ ApplicationWindow {
     property string toastText: ""
     property bool toastPending: false
     readonly property bool toastHasUndo: !!app.undoMessage && toastText === app.undoMessage
-    readonly property bool serverDisconnected: app.page === "server" && !app.server.connected && !app.server.connecting
     // Material's window size classes, and the pane margins and grid gutter it
     // keys to them. The feed on Home reads its card size off the same classes,
     // so a wider window shows more of the library rather than the same amount
@@ -138,7 +141,7 @@ ApplicationWindow {
     // ModalBottomSheet.kt keeps the page behind its scrim out of traversal.
     // Playback keys are gated with the other page shortcuts while it is open.
     readonly property bool modalOpen: immersiveQueue.visible || panelSheet.open || otherModalOpen
-    readonly property bool otherModalOpen: trimDialog.visible || onboarding.visible || artworkViewer.visible || (immersiveLoader.item && immersiveLoader.item.popupVisible) || viewLayoutDialog.visible || volumeControl.popupVisible || homeEditor.visible || outputPicker.visible || sessionsDialog.visible || statsDialog.visible || playlistVersionsDialog.visible || playlistCoverDialog.visible || commandPalette.visible || artworkControls.visible || smartDialog.visible || trackDetails.visible || shortcutHelp.visible || duplicateDialog.visible || serverToolbar.dialogOpen || serverConnection.visible || serverAddDialog.visible || serverRenameDialog.visible || serverDeleteDialog.visible || serverRatingDialog.visible || musicFoldersDialog.visible || musicFolderEntry.visible || cleanupDialog.visible || navigationDrawer.visible || bulkActions.visible || volumeStepMenu.visible || rateDialog.visible || lyricTimingDialog.visible || settingsDialog.visible || playlistDialog.visible || addPlaylistDialog.visible || deletePlaylistDialog.visible || actions.visible || playlistActions.visible || sleepMenu.visible || (fileDialogs!==null && fileDialogs.visible) || audioDeviceDialog.visible || collectionSort.menuOpen
+    readonly property bool otherModalOpen: trimDialog.visible || onboarding.visible || artworkViewer.visible || (immersiveLoader.item && immersiveLoader.item.popupVisible) || viewLayoutDialog.visible || volumeControl.popupVisible || homeEditor.visible || outputPicker.visible || sessionsDialog.visible || statsDialog.visible || playlistVersionsDialog.visible || playlistCoverDialog.visible || commandPalette.visible || artworkControls.visible || smartDialog.visible || trackDetails.visible || shortcutHelp.visible || duplicateDialog.visible || qqMusicLogin.visible || musicFoldersDialog.visible || musicFolderEntry.visible || cleanupDialog.visible || navigationDrawer.visible || bulkActions.visible || volumeStepMenu.visible || rateDialog.visible || lyricTimingDialog.visible || settingsDialog.visible || playlistDialog.visible || addPlaylistDialog.visible || deletePlaylistDialog.visible || actions.visible || playlistActions.visible || sleepMenu.visible || (fileDialogs!==null && fileDialogs.visible) || audioDeviceDialog.visible || collectionSort.menuOpen
     property bool sliderFocused: window.activeFocusItem && window.activeFocusItem.handlesArrowKeys === true
     function selectedView() {var item=window.activeFocusItem;while(item){if(item.sourceRows!==undefined)return item;item=item.parent;}return tracks;}
     function addBatch(view) {batchItems=view.selection.items();addPlaylistDialog.open();}
@@ -383,14 +386,12 @@ ApplicationWindow {
         if(miniPlayer)miniPlayer.hide();
     }
     function relatedItem(item,kind) {
-        return {kind:kind,title:kind==="artist"?item.artist:item.album,browseId:item[kind+"Id"],remoteId:item[kind+"Id"],source:item.source || "",server:item.server || ""}
+        return {kind:kind,title:kind==="artist"?item.artist:item.album,browseId:item[kind+"Id"],remoteId:item[kind+"Id"],source:item.source || ""}
     }
-    function openServerConnection() {serverConnection.open()}
     // The field is part of the Search page rather than the window, so reaching
     // it means arriving there first; an item that is not on screen yet cannot
     // take the focus.
     function focusSearch() {
-        if(app.page==="server"){searchField.forceActiveFocus();searchField.selectAll();return;}
         if(immersive)toggleImmersive();
         side="";app.startSearch();destination="search";
         searchField.forceActiveFocus();searchField.selectAll();
@@ -473,7 +474,7 @@ ApplicationWindow {
     // travel through them.
     NavigationTransition { id: destinationTransition; objectName: "destinationTransition"; target: contentColumn }
     NavigationTransition { id: tabTransition; objectName: "tabTransition"; target: contentBody }
-    readonly property var libraryOrder: ["favorites","playlists","files","local-albums","local-artists","mixes","history","server"]
+    readonly property var libraryOrder: ["favorites","playlists","files","local-albums","local-artists","local-playlists","local-favorites","mixes","history"]
     // Material's compact window class. Below it a rail would be taking room the
     // content needs, so navigation moves to a bar along the bottom.
     readonly property bool compactWindow: !atLeastMedium
@@ -504,7 +505,7 @@ ApplicationWindow {
     // class up, and drops into a bottom sheet below it. This was 1000, which
     // is not a breakpoint.
     readonly property bool sheetMode: !atLeastExpanded
-    readonly property bool artistPage: app.page==="artist" || app.page==="local-artist" || (app.page==="server" && app.serverRequest.mode==="artist")
+    readonly property bool artistPage: app.page==="artist" || app.page==="local-artist"
     function confirmQueued() { toastPending=false;toastText="Added to queue";toastPending=true; }
     // Which destination navigation marks. Pressing one marks it at once, while
     // the page it leads to changes on the transition's own timing. The two were
@@ -548,7 +549,7 @@ ApplicationWindow {
         id: commandPalette; anchors.centerIn: parent
         commands: visible?window.quickCommands():[]
         onChosen: c => {
-            if(c.id.startsWith("playlist:")){window.destination="library";window.libraryTab="playlists";window.localPlaylist=c.value;app.openPlaylist(c.value);}
+            if(c.id.startsWith("playlist:")){window.destination="library";window.libraryTab="local-playlists";window.localPlaylist=c.value;app.openPlaylist(c.value);}
             else if(c.id.startsWith("device:"))app.audioDeviceId=c.value;
             else if(c.id==="search")window.focusSearch();
             else if(c.id==="queue" || c.id==="lyrics"){if(window.immersive)window.toggleImmersive();window.side=c.id;if(c.id==="lyrics")app.fetchLyrics();}
@@ -595,7 +596,8 @@ ApplicationWindow {
     Shortcut { sequence: "Ctrl+Y"; enabled: !window.modalOpen && !window.immersive; onActivated: window.activateSide("lyrics") }
     Shortcut { sequence: "Alt+Left"; enabled: !window.modalOpen && !window.immersive; onActivated: window.navigateBack() }
     Shortcut { sequence: "Escape"; enabled: !window.modalOpen && !(window.activeFocusItem && window.activeFocusItem.objectName==="lyricSearchField"); onActivated: { if(trackDrag.owner)trackDrag.cancel();else if(window.selectedView().selection.count)window.selectedView().selection.clear();else if(window.immersive)window.toggleImmersive();else {window.side="";content.forceActiveFocus();} } }
-    Shortcut { sequence: "Ctrl+Q"; onActivated: window.close() }
+    // Quit applies to dialogs and the mini player as well as the main window.
+    Shortcut { sequence: "Ctrl+Q"; context: Qt.ApplicationShortcut; onActivated: Qt.quit() }
 
     Instantiator {
         model: 10
@@ -936,7 +938,7 @@ ApplicationWindow {
                         anchors.fill: parent; anchors.margins: window.paneMargin
                         // SearchBar.kt:932-937 gives compact search the room for results.
                         // SearchBarVerticalPadding at :4174 supplies this 8dp rhythm.
-                        spacing: app.page==="server" || (app.page==="search" && window.compactWindow) ? 8 : 16
+                        spacing: app.page==="search" && window.compactWindow ? 8 : 16
                         ArtistHero {
                             objectName: "artistHero"
                             Layout.fillWidth: true
@@ -944,7 +946,7 @@ ApplicationWindow {
                             collapse: content.headerCollapse
                         }
                         RowLayout {
-                            visible: !window.artistPage && app.page!=="library"
+                            visible: !window.artistPage && app.page!=="library" && app.page!=="home"
                             Layout.fillWidth: true; spacing: 16
                             readonly property var playlistData: app.page==="local" ? (app.playlists.find(p => p.id===app.libraryId) || ({})) : ({})
                             // ArtCard.qml uses PlaylistCover for the grid mosaic;
@@ -966,7 +968,7 @@ ApplicationWindow {
                                     Layout.minimumWidth: 0; Layout.maximumWidth: 720
                                     Layout.preferredHeight: visible ? 56 : 0
                                 }
-                            SungText {heading: true; visible: !pageSearchHost.visible && !(app.page==="server" && !app.collectionItem.id); text: app.title; objectName: "collectionHeaderTitle"; emphasized: true; scaled: true; font.pixelSize: app.page==="home"?Theme.displaySmall:Theme.headlineMedium-(Theme.headlineMedium-Theme.titleLarge)*content.headerCollapse; // PaneMotion.kt:155-177 uses DefaultSpatial for changing bounds.
+                            SungText {heading: true; visible: !pageSearchHost.visible; text: app.title; objectName: "collectionHeaderTitle"; emphasized: true; scaled: true; font.pixelSize: app.page==="home"?Theme.displaySmall:Theme.headlineMedium-(Theme.headlineMedium-Theme.titleLarge)*content.headerCollapse; // PaneMotion.kt:155-177 uses DefaultSpatial for changing bounds.
                                 Behavior on font.pixelSize { id:collectionTitleSizeBehavior; NumberAnimation { objectName:"collectionTitleSizeMotion"; duration: app.motion?Theme.springSpatialMs:0; easing.type: Easing.BezierSpline; easing.bezierCurve: Theme.springSpatial } } Layout.fillWidth: true; wrapMode: Text.Wrap; maximumLineCount: 2 }
                                 SungText { objectName: "albumArtist"; visible: !!app.albumInfo.artist;opacity:1-content.headerCollapse;Layout.maximumHeight:implicitHeight*(1-content.headerCollapse);clip:true; Layout.fillWidth: true; text: app.albumInfo.artist || ""; font.pixelSize: Theme.bodyLarge; color: Theme.muted; maximumLineCount: 2; wrapMode: Text.Wrap }
                                 SungText { objectName: "albumSummary"; visible: !!app.albumInfo.summary || app.page==="local";opacity:1-content.headerCollapse;Layout.maximumHeight:implicitHeight*(1-content.headerCollapse);clip:true; Layout.fillWidth: true
@@ -1022,7 +1024,7 @@ ApplicationWindow {
                             Row {
                                 id: filterRow; spacing: 8
                                 Repeater {
-                                    model: [{label:"Songs",key:"songs"},{label:"Albums",key:"albums"},{label:"Artists",key:"artists"},{label:"Playlists",key:"playlists"},{label:"Videos",key:"videos"}]
+                                    model: [{label:"Songs",key:"songs"},{label:"Albums",key:"albums"},{label:"Artists",key:"artists"},{label:"Playlists",key:"playlists"}]
                                     MChip { required property var modelData; objectName: "filter_"+modelData.key; text: modelData.label; selected: window.filter===modelData.key; onClicked: {window.filter=modelData.key;if(searchField.text.trim())app.search(searchField.text,window.filter);} }
                                 }
                             }
@@ -1044,13 +1046,24 @@ ApplicationWindow {
                             objectName: "libraryTabs"
                             // ListDetailPaneScaffold.kt:224-253 gives a detail
                             // its own pane role; tabs select root collections.
-                            visible: window.destination==="library" && (app.page==="library" || (app.page==="server" && !app.collectionItem.id)); Layout.fillWidth: true
+                            visible: window.destination==="library" && app.page==="library"; Layout.fillWidth: true
                             currentKey: window.libraryTab
                             dotKey: app.importingLocal ? "files" : ""
                             onChosen: key => window.chooseLibrary(key)
                         }
                         RowLayout {
-                            visible: window.destination==="library" && app.page==="library" && ["files","local-albums","local-artists"].indexOf(window.libraryTab)>=0
+                            visible: app.qqMusicLibrary
+                            Layout.fillWidth: true; spacing: 8
+                            ColumnLayout {
+                                Layout.fillWidth: true; spacing: 2
+                                SungText { text: "QQ MUSIC"; color: Theme.primary; labelRole: true; font.pixelSize: Theme.labelLarge }
+                                SungText { visible: !!app.qqMusicLibraryNotice; text: app.qqMusicLibraryNotice; Layout.fillWidth: true; wrapMode: Text.Wrap; color: Theme.muted; font.pixelSize: Theme.bodySmall }
+                            }
+                            MButton { objectName: "qqMusicLibrarySignIn"; text: app.qqMusicCredential?"Sign in again":"Sign in"; onClicked: qqMusicLogin.open() }
+                            MButton { objectName: "qqMusicLibraryRefresh"; symbol: "refresh"; tip: "Refresh QQ Music library"; enabled: app.qqMusicCredential && !app.busy; onClicked: app.refresh() }
+                        }
+                        RowLayout {
+                            visible: window.destination==="library" && app.page==="library" && ["files","local-albums","local-artists","local-playlists","local-favorites"].indexOf(window.libraryTab)>=0
                             Layout.fillWidth: true; spacing: 8
                             LibraryTabs {
                                 objectName: "localFacetTabs"
@@ -1058,7 +1071,9 @@ ApplicationWindow {
                                 Layout.preferredWidth: 320
                                 entries: [{label:"Songs", key:"files", name:"localView_files"},
                                           {label:"Albums", key:"local-albums", name:"localView_local-albums"},
-                                          {label:"Artists", key:"local-artists", name:"localView_local-artists"}]
+                                          {label:"Artists", key:"local-artists", name:"localView_local-artists"},
+                                          {label:"Playlists", key:"local-playlists", name:"localView_local-playlists"},
+                                          {label:"Liked", key:"local-favorites", name:"localView_local-favorites"}]
                                 currentKey: window.libraryTab
                                 onChosen: key => window.chooseLibrary(key)
                             }
@@ -1071,21 +1086,14 @@ ApplicationWindow {
                             Accessible.name:placeholderText
                         }
                         }
-                        ServerToolbar { id: serverToolbar; Layout.fillWidth: true; visible: app.page==="server" && !window.serverDisconnected; onConnectRequested: serverConnection.open() }
-                        Flow {
-                            visible: app.page==="home" && window.destination!=="library"; Layout.fillWidth: true; spacing: 8
-                            Repeater {
-                                model: [{title:"Feel good",q:"feel good songs"},{title:"Focus",q:"instrumental focus"},{title:"Unwind",q:"chill evening"},{title:"Energize",q:"workout energy"}]
-                                MChip { required property var modelData; text: modelData.title; selectable: false; onClicked: {searchField.text=modelData.q;window.destination="search";app.search(modelData.q,"songs");} }
-                            }
-                        }
+
                         RowLayout {
                             // An artist's hero owns these actions while it is
                             // open; the row takes them back as it collapses, so
                             // exactly one Play is ever on screen.
                             // SearchBar.kt:932-937 favours results on compact screens.
                             // Each song row still opens and plays directly.
-                            visible: !(app.page==="search" && window.compactWindow) && ((tracks.selection.count===0 && app.results.count>0 && !window.feedShowing && !(window.destination==="library" && window.libraryTab==="playlists" && !window.localPlaylist) && !!(app.results.get(0).videoId || app.results.get(0).localPath || app.results.get(0).serverSong) && (!window.artistPage || content.compactHeader)) || (app.page==="library" && app.libraryId==="files"))
+                            visible: !(app.page==="search" && window.compactWindow) && ((tracks.selection.count===0 && app.results.count>0 && !window.feedShowing && !(window.destination==="library" && window.libraryTab==="local-playlists" && !window.localPlaylist) && !!(app.results.get(0).localPath || app.results.get(0).qqMusicSong) && (!window.artistPage || content.compactHeader)) || (app.page==="library" && app.libraryId==="files"))
                             Layout.fillWidth: true; spacing: 12
                             MSplitButton {
                                 objectName: "collectionPlay"
@@ -1174,7 +1182,7 @@ ApplicationWindow {
                             Layout.leftMargin: -contentColumn.anchors.margins
                             Layout.rightMargin: -contentColumn.anchors.margins
                             view: tracks
-                            canRemove: window.editableLocal || app.serverPlaylistEditable
+                            canRemove: window.editableLocal
                         }
                         Item {
                             id: contentBody
@@ -1184,8 +1192,8 @@ ApplicationWindow {
                             // whichever list is on screen.
                             MPullToRefresh {
                                 objectName: "contentRefresh"
-                                target: shelves.visible ? shelves : tracks.visible ? tracks : localGroups.visible ? localGroups : null
-                                enabled: !!target && (app.page!=="library" || window.libraryTab!=="playlists")
+                                target: qqPlaylists.visible ? qqPlaylists.refreshTarget : shelves.visible ? shelves : tracks.visible ? tracks : localGroups.visible ? localGroups : null
+                                enabled: !!target && (app.page!=="library" || window.libraryTab!=="local-playlists")
                                 busy: app.busy || app.importingLocal
                                 onTriggered: {
                                     if(window.destination==="library" && window.libraryTab.startsWith("local")) app.rescanMusicFolders()
@@ -1224,7 +1232,7 @@ ApplicationWindow {
                                 visible: window.libraryAddApplies
                                 onVisibleChanged: if(!visible)close()
                                 label: "Add to your library"
-                                actions: window.libraryTab==="playlists"
+                                actions: window.libraryTab==="local-playlists"
                                     ? [{label:"New playlist",symbol:"plus",action:function(){window.playlistAction="create";playlistName.clear();playlistDialog.open();}},
                                        {label:"Smart playlist",symbol:"filter",action:function(){smartDialog.edit("")}},
                                        {label:"Import M3U",symbol:"folder",action:function(){window.openFileDialog("m3u-import")}}]
@@ -1234,33 +1242,59 @@ ApplicationWindow {
                             property real shift: 0
                             transform: Translate { x: contentBody.shift }
                             Layout.fillWidth: true; Layout.fillHeight: true
-                            Column {
-                                objectName: "serverEmptyState"; anchors.centerIn: parent; spacing: 16
-                                visible: window.serverDisconnected
-                                // The empty TrackList is a later full-page sibling.
-                                // Keep this action above its transparent hit area.
-                                z: 1
-                                SungText { anchors.horizontalCenter: parent.horizontalCenter; text: "Connect your music library"; font.pixelSize: Theme.titleLarge }
-                                MButton { objectName: "serverEmptyConnect"; anchors.horizontalCenter: parent.horizontalCenter; text: "Connect server"; filled: true; onClicked: serverConnection.open() }
-                            }
-                            Column {anchors.centerIn:parent;spacing:12;visible:app.page==="home"&&!app.busy&&window.homeSections.length===0&&app.homeSections(true).length>0
-                                SungText {text:"Home sections are hidden";color:Theme.muted;anchors.horizontalCenter:parent.horizontalCenter}
-                                MButton {objectName:"restoreHomeSections";text:"Restore sections";tonal:true;anchors.horizontalCenter:parent.horizontalCenter;onClicked:app.resetHomeLayout()}
-                            }
+
                             CatalogSkeleton {
                                 anchors.fill: parent
                                 // contentBody starts below the header. Empty rows and
                                 // shelves leave this pane for their placeholders.
-                                loading: app.busy && app.results.count===0 && window.homeSections.length===0
-                                cards: app.page==="home" || app.page==="artist"
+                                loading: app.page!=="home" && !(app.qqMusicLibrary && app.libraryId==="playlists") && app.busy && app.results.count===0 && window.homeSections.length===0
+                                cards: app.page==="artist"
                             }
                             ListView {
                                 id: shelves; objectName: "homeShelves"; anchors.fill: parent
-                                visible: window.homeSections.length>0 && !(window.destination==="library"&&window.libraryTab==="playlists")
+                                visible: app.page==="home" || (window.homeSections.length>0 && !(window.destination==="library"&&window.libraryTab==="local-playlists"))
                                 clip: true; spacing: window.paneGutter+2; reuseItems: true; cacheBuffer: 0
                                 model: window.homeSections; boundsBehavior: Flickable.StopAtBounds
                                 ScrollBar.vertical: MScrollBar {}
                                 MSmoothWheel { flick: shelves }
+                                // The home header scrolls with its recommendations,
+                                // leaving enough room to inspect cards on short windows.
+                                header: Column {
+                                    width: shelves.width
+                                    height: app.page==="home" ? implicitHeight : 0
+                                    visible: app.page==="home"
+                                    QQMusicHomeHeader {
+                                        width: parent.width
+                                        onSignInRequested: qqMusicLogin.open()
+                                        onSearchRequested: window.focusSearch()
+                                        onCustomizeRequested: homeEditor.open()
+                                    }
+                                    Item { width: 1; height: 16 }
+                                }
+                                footer: Item {
+                                    width: shelves.width
+                                    height: app.page==="home" && window.homeSections.length===0 ? Math.max(app.busy?240:qqHomeEmpty.implicitHeight+16,shelves.height-(shelves.headerItem?shelves.headerItem.height:0)) : 0
+                                    visible: height>0
+                                    CatalogSkeleton { anchors.fill: parent; cards: true; loading: app.page==="home" && app.busy && window.homeSections.length===0 }
+                                    ColumnLayout {
+                                        id: qqHomeEmpty
+                                        objectName: "qqMusicHomeEmpty"
+                                        anchors.centerIn: parent
+                                        width: Math.min(360,parent.width-24); spacing: 12
+                                        visible: app.page==="home" && !app.busy && app.homeSections(true).length===0
+                                        SungText { text: "Recommendations are unavailable"; heading: true; emphasized: true; font.pixelSize: Theme.titleMedium; Layout.fillWidth: true; wrapMode: Text.Wrap; horizontalAlignment: Text.AlignHCenter }
+                                        SungText { text: app.homeError || "Check your connection and refresh. If your sign-in has expired, sign in again."; font.pixelSize: Theme.bodyMedium; color: Theme.muted; Layout.fillWidth: true; wrapMode: Text.Wrap; horizontalAlignment: Text.AlignHCenter; Accessible.role: Accessible.AlertMessage }
+                                        RowLayout {
+                                            Layout.alignment: Qt.AlignHCenter
+                                            MButton { objectName: "qqMusicHomeRetry"; text: "Refresh"; filled: true; onClicked: app.home() }
+                                            MButton { text: "Sign in"; onClicked: qqMusicLogin.open() }
+                                        }
+                                    }
+                                    Column {anchors.centerIn:parent;spacing:12;visible:app.page==="home"&&!app.busy&&window.homeSections.length===0&&app.homeSections(true).length>0
+                                        SungText {text:"Home sections are hidden";color:Theme.muted;anchors.horizontalCenter:parent.horizontalCenter}
+                                        MButton {objectName:"restoreHomeSections";text:"Restore sections";tonal:true;anchors.horizontalCenter:parent.horizontalCenter;onClicked:app.resetHomeLayout()}
+                                    }
+                                }
                                 delegate: ColumnLayout {
                                     required property var modelData
                                     width: shelves.width; height: implicitHeight; spacing: 12
@@ -1282,9 +1316,9 @@ ApplicationWindow {
                                         // A cover taller than the shelf list could never be
                                         // scrolled wholly into view, and a short window
                                         // (480x620) left keyboard focus on a clipped card.
-                                        // It stays within the list's height, down to the
-                                        // compact density's 112.
-                                        cellWidth: Math.min(Math.max(112,shelves.height-8),Math.max(app.viewCompactDensity?112:142,Math.min(app.viewCompactDensity?148:window.feedCardWidth,(width-40)/(app.viewCompactDensity?4.35:3.35))))
+                                        // Reserve the heading and labels as well as
+                                        // the cover, so the whole card can scroll into view.
+                                        cellWidth: Math.min(Math.max(72,shelves.height-132),Math.max(app.viewCompactDensity?112:142,Math.min(app.viewCompactDensity?148:window.feedCardWidth,(width-40)/(app.viewCompactDensity?4.35:3.35))))
                                         model: modelData.items
                                         openHandler: window.openCollection
                                     }
@@ -1308,46 +1342,52 @@ ApplicationWindow {
                             TrackList {
                                 id: tracks; groupDiscs: !!app.albumInfo.multipleDiscs && app.collection.sortKey==="original"; objectName: "tracksView"; anchors.fill: parent; clip: true
                                 bottomMargin: libraryFab.visible ? libraryFab.height+24 : 0
-                                visible: !localGroups.visible && !window.feedShowing && !(window.destination==="library"&&window.libraryTab==="playlists"&&!window.localPlaylist)
+                                visible: app.page!=="home" && !(app.qqMusicLibrary && app.libraryId==="playlists") && !localGroups.visible && !window.feedShowing && !(window.destination==="library"&&window.libraryTab==="local-playlists"&&!window.localPlaylist)
                                 groupFolders: app.page==="library" && app.libraryId==="files" && app.collection.sortKey==="folder"
                                 model: app.collection; reuseItems: true; cacheBuffer: 100; boundsBehavior: Flickable.StopAtBounds
-                                queueMode: false; reorderEnabled: (window.editableLocal || app.serverPlaylistEditable) && app.collection.sortKey==="original" && !app.collection.query
+                                queueMode: false; reorderEnabled: (window.editableLocal) && app.collection.sortKey==="original" && !app.collection.query
                                 playlistId: window.localPlaylist; dragHub: trackDrag
-                                matchQuery: app.collection.query || (app.page==="search"?app.query:app.page==="server"?(app.serverRequest.query || ""):"")
-                                onActivate: (row,item)=>{if(item.videoId || item.localPath || item.serverSong)app.playCollection(row);else app.open(item);}
+                                matchQuery: app.collection.query || (app.page==="search"?app.query:"")
+                                onActivate: (row,item)=>{if(item.localPath || item.qqMusicSong)app.playCollection(row);else app.open(item);}
                                 onMenuRequested: (item,index,anchor)=>window.trackMenu(item,index,anchor,false)
-                                onRemoveSelected: {if(app.serverPlaylistEditable)app.removeServerRows(sourceRows());else if(window.localPlaylist)app.removePlaylistRows(window.localPlaylist,sourceRows());}
+                                onRemoveSelected: {if(window.localPlaylist)app.removePlaylistRows(window.localPlaylist,sourceRows());}
                                 onAddSelected: window.addBatch(tracks)
                                 footer: Item {
-                                    width: tracks.width; height: app.canMore && tracks.count>0 ? 64 : 0
-                                    MButton { objectName:"loadMoreButton"; anchors.centerIn: parent; text: app.busy ? "Loading…" : "Load more"; busy: app.busy; enabled: !app.busy; tonal: true; visible: app.canMore && tracks.count>0; onClicked: app.more() }
+                                    width: tracks.width; height: app.canMore ? 64 : 0
+                                    MButton { objectName:"loadMoreButton"; anchors.centerIn: parent; text: app.busy ? "Loading…" : "Load more"; busy: app.busy; enabled: !app.busy; tonal: true; visible: app.canMore; onClicked: app.more() }
                                 }
                                 Column {
                                     objectName: "collectionEmptyState"; anchors.centerIn: parent; width: Math.min(parent.width,320)
                                     // Material's 4dp spacing step lets the 48dp button and
                                     // the body line fit the compact Local files viewport.
-                                    spacing: window.compactWindow && app.page==="library" && window.libraryTab==="files"
+                                    spacing: window.compactWindow && app.page==="library" && (window.libraryTab==="files" || app.qqMusicLibrary)
                                         ? Theme.spaceSmall : Theme.spaceLarge
-                                    visible: app.collection.count===0 && !app.busy && !window.serverDisconnected
+                                    visible: app.collection.count===0 && !app.busy && !app.canMore
                                     // At compact Local files widths the toolbar and player
                                     // leave room for the message and action, but not the icon.
-                                    Icon { anchors.horizontalCenter: parent.horizontalCenter; visible: !(window.compactWindow && app.page==="library" && window.libraryTab==="files"); name: app.error?"refresh":app.collection.query || app.page==="search"?"search":"library"; size: 36; ink: Theme.muted }
+                                    Icon { anchors.horizontalCenter: parent.horizontalCenter; visible: !(window.compactWindow && app.page==="library" && (window.libraryTab==="files" || app.qqMusicLibrary)); name: app.error?"refresh":app.collection.query || app.page==="search"?"search":"library"; size: 36; ink: Theme.muted }
                                     // Empty playlist guidance names the exact song-menu action;
                                     // the only button below takes the reader to songs.
                                     // Material BodyMedium's 20dp line replaces BodyLarge's
                                     // 24dp line only where Local files has a compact toolbar.
-                                    SungText { objectName:app.page==="local"?"emptyPlaylistHint":"collectionEmptyMessage"; width: parent.width; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap; text: app.collection.query ? "No matching songs" : app.error ? "Couldn’t load music" : app.page==="library" ? (window.libraryTab==="files"?"No local music yet":window.libraryTab==="history"?"Nothing played yet":window.libraryTab.startsWith("mix-")?"No matching songs yet":"No liked songs yet") : app.page==="local" ? "Choose Add to playlist in any song’s menu" : app.page==="search" && !app.query ? "Search music" : "No results"; color: Theme.muted; font.pixelSize: window.compactWindow && app.page==="library" && window.libraryTab==="files" ? Theme.bodyMedium : Theme.bodyLarge }
+                                    SungText { objectName:app.page==="local"?"emptyPlaylistHint":"collectionEmptyMessage"; width: parent.width; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap; text: app.qqMusicLibrary && !app.qqMusicCredential ? "Sign in to QQ Music to load your liked songs" : app.collection.query ? "No matching songs" : app.error ? "Couldn’t load music" : app.page==="library" ? (window.libraryTab==="files"?"No local music yet":window.libraryTab==="history"?"Nothing played yet":window.libraryTab.startsWith("mix-")?"No matching songs yet":"No liked songs yet") : app.page==="local" ? "Choose Add to local playlist in any song’s menu" : app.page==="search" && !app.query ? "Search music" : "No results"; color: Theme.muted; font.pixelSize: window.compactWindow && app.page==="library" && window.libraryTab==="files" ? Theme.bodyMedium : Theme.bodyLarge }
                                     MButton {
                                         objectName: "emptyStateAction"; anchors.horizontalCenter: parent.horizontalCenter; tonal: true
-                                        text: app.collection.query?"Clear filters":app.error && app.canRetry?"Retry":window.libraryTab==="files" && app.page==="library"?"Add music":app.page==="local"?"Find songs":"Search music"
-                                        onClicked: {if(app.collection.query)app.collection.query="";else if(app.error && app.canRetry)app.retry();else if(window.libraryTab==="files" && app.page==="library")window.openFileDialog("audio");else window.focusSearch();}
+                                        text: app.qqMusicLibrary && !app.qqMusicCredential?"Sign in":app.collection.query?"Clear filters":app.error && app.canRetry?"Retry":window.libraryTab==="files" && app.page==="library"?"Add music":app.page==="local"?"Find songs":"Search music"
+                                        onClicked: {if(app.qqMusicLibrary && !app.qqMusicCredential)qqMusicLogin.open();else if(app.collection.query)app.collection.query="";else if(app.error && app.canRetry)app.retry();else if(window.libraryTab==="files" && app.page==="library")window.openFileDialog("audio");else window.focusSearch();}
                                     }
                                 }
+                            }
+                            QQMusicPlaylists {
+                                id: qqPlaylists; anchors.fill: parent
+                                visible: app.qqMusicLibrary && app.libraryId==="playlists"
+                                onOpenRequested: playlist => window.openCollection(playlist)
+                                onSignInRequested: qqMusicLogin.open()
                             }
                             GridView {
                                 id:playlistGrid;objectName:"playlistGrid";anchors.fill:parent;clip:true;reuseItems:true;cacheBuffer:0
                                 bottomMargin: libraryFab.visible ? libraryFab.height+24 : 0
-                                visible:window.destination==="library"&&window.libraryTab==="playlists"&&!window.localPlaylist&&app.viewMode==="grid"
+                                visible:window.destination==="library"&&window.libraryTab==="local-playlists"&&!window.localPlaylist&&app.viewMode==="grid"
                                 model:visible?app.playlists:[];cellWidth:width/Math.max(2,Math.floor(width/Theme.gridCell));
                                 // PaneMotion.kt:150-177 uses DefaultSpatial for pane width.
                                 Behavior on cellWidth {id:playlistGridWidthBehavior;enabled:app.motion && playlistGrid.visible;NumberAnimation {objectName:"playlistGridWidthMotion";duration:Theme.springSpatialMs;easing.type:Easing.BezierSpline;easing.bezierCurve:Theme.springSpatial}}
@@ -1370,7 +1410,7 @@ ApplicationWindow {
                             }
                             ListView {
                                 id: localPlaylists; anchors.fill: parent; clip: true; spacing: 8
-                                visible: window.destination==="library"&&window.libraryTab==="playlists"&&!window.localPlaylist&&app.viewMode!=="grid"
+                                visible: window.destination==="library"&&window.libraryTab==="local-playlists"&&!window.localPlaylist&&app.viewMode!=="grid"
                                 model: app.playlists
                                 MSmoothWheel { flick: localPlaylists }
                                 delegate: Rectangle {
@@ -1661,7 +1701,7 @@ ApplicationWindow {
     // either way, moved between the two slots.
     Rectangle {
         id: searchBox; objectName: "searchBar"; z: 20
-        readonly property bool onItsPage: app.page==="search" || (app.page==="server" && !window.serverDisconnected)
+        readonly property bool onItsPage: app.page==="search"
         parent: window.sidebarNav ? topBarSearchHost : pageSearchHost
         anchors.fill: parent
         visible: window.sidebarNav || onItsPage
@@ -1680,23 +1720,22 @@ ApplicationWindow {
             Icon { name: "search"; ink: Theme.text }
             TextField {
                 font.family: Theme.fontFamily; id: searchField; objectName: "searchField"; Layout.fillWidth: true; Layout.fillHeight: true
-                placeholderText: app.page==="server"?(app.server.remotePlayback?"Search Apple Music":"Search server"):"Search music"; placeholderTextColor: Theme.muted
+                placeholderText: "Search QQ Music"; placeholderTextColor: Theme.muted
                 color: Theme.text; selectionColor: Theme.textSelection; selectedTextColor: Theme.text; cursorDelegate: MCaret {}
                 font.pixelSize: Theme.bodyLarge; background: null; selectByMouse: true
-                Accessible.name: app.page==="server"?(app.server.remotePlayback?"Search Apple Music":"Search music server"):"Search songs, albums, artists, playlists, or paste a YouTube link"
+                Accessible.name: "Search QQ Music or paste a music link"
                 property var suggestions: []
                 property int highlighted: -1
                 property bool dismissed: false
                 function updateSuggestions() {
                     highlighted=-1;
-                    if(app.page==="server"){suggestions=[];return;}
                     // Material's search view groups what it offers under
                     // category labels rather than running it together.
                     suggestions=text.trim()
                         ? app.localMatches(text).map(m=>Object.assign({},m,{group:m.kind==="local"?"Playlists":"Songs"}))
                         : app.recentSearches.map(q=>({title:q,recent:true,group:"Recent"}));
                 }
-                function submit() {if(app.page==="server"){dismissed=true;app.browseServer("search",text,serverToolbar.searchFilter);content.forceActiveFocus();return;}dismissed=true;window.destination="search";window.localPlaylist="";app.search(text,window.filter);content.forceActiveFocus();}
+                function submit() {dismissed=true;window.destination="search";window.localPlaylist="";app.search(text,window.filter);content.forceActiveFocus();}
                 function choose(index) {
                     if(index<0 || index>=suggestions.length){submit();return;}
                     const item=suggestions[index];dismissed=true;
@@ -1997,7 +2036,7 @@ ApplicationWindow {
                 RowLayout {
                     Layout.fillWidth: true
                     MButton { symbol: "heart"; tip: app.liked?"Unlike":"Like"; toggle: true; selected: app.liked; onClicked: app.toggleLike(app.current) }
-                    MButton { symbol: "radio"; tip: "Start radio"; enabled: !!app.current.videoId; onClicked: app.radio(app.current) }
+                    MButton { symbol: "radio"; tip: "Play recommendations"; enabled: app.current.source==="qqmusic"; onClicked: app.radio(app.current) }
                     MButton { symbol: "more"; tip: "Track actions"; enabled: app.currentIndex>=0; onClicked: window.trackMenu(app.current,app.currentIndex,this,true) }
                 }
                 RowLayout { Layout.fillWidth: true; MButton { symbol: app.volume>0?"volume":"mute"; tip: app.volume>0?"Mute":"Unmute"; onClicked: window.toggleMute() } SeekBar { volumeMode: true; Layout.fillWidth: true } }
@@ -2050,32 +2089,27 @@ ApplicationWindow {
         id: bulkActions; objectName: "bulkActions"
         MMenuItem { symbol: "next"; text: "Play selected next"; onTriggered: app.enqueueItems(window.bulkView.selection.items(),true) }
         MMenuItem { symbol: "queue"; text: "Add selected to queue"; onTriggered: app.enqueueItems(window.bulkView.selection.items()) }
-        MMenuItem { symbol: "plus"; text: "Add selected to playlist"; onTriggered: window.addBatch(window.bulkView) }
-        MMenuItem { symbol: "remove"; text: "Remove selected"; visible: window.bulkView && (window.bulkView.queueMode || window.editableLocal || app.serverPlaylistEditable); onTriggered: window.bulkView.removeSelected() }
+        MMenuItem { symbol: "plus"; text: "Add selected to local playlist"; onTriggered: window.addBatch(window.bulkView) }
+        MMenuItem { symbol: "remove"; text: "Remove selected"; visible: window.bulkView && (window.bulkView.queueMode || window.editableLocal); onTriggered: window.bulkView.removeSelected() }
         MMenuItem { symbol: "check"; text: "Select all"; shortcut: "Ctrl+A"; onTriggered: window.bulkView.selection.selectAll() }
         MMenuItem { symbol: "close"; text: "Clear selection"; shortcut: "Esc"; onTriggered: window.bulkView.selection.clear() }
     }
     MMenu {
         id: actions; objectName: "trackActions"
-        MMenuItem { text: "Open"; visible: !(window.menuItem.videoId || window.menuItem.localPath || window.menuItem.serverSong); onTriggered: app.open(window.menuItem) }
-        MMenuItem { objectName: "playKeepQueueAction"; symbol: "play"; text: "Play now, keep queue"; visible: !!(window.menuItem.videoId || window.menuItem.localPath || window.menuItem.serverSong); onTriggered: app.playKeepingQueue(window.menuItem) }
-        MMenuItem { symbol: "next"; text: "Play next"; visible: !!(window.menuItem.videoId || window.menuItem.localPath || window.menuItem.serverSong); onTriggered: app.enqueue(window.menuItem,true) }
-        MMenuItem { symbol: "queue"; text: "Add to queue"; visible: !!(window.menuItem.videoId || window.menuItem.localPath || window.menuItem.serverSong); onTriggered: app.enqueue(window.menuItem) }
-        MMenuItem { symbol: "radio"; text: "Start radio"; visible: !!window.menuItem.videoId; onTriggered: app.radio(window.menuItem) }
-        MMenuItem { objectName: "trimAction"; symbol: "volume"; text: "Adjust volume\u2026"; visible: !!(window.menuItem.videoId || window.menuItem.localPath || window.menuItem.serverSong); onTriggered: trimDialog.adjust(window.menuItem) }
-        MDivider { visible: !!(window.menuItem.videoId || window.menuItem.localPath || window.menuItem.serverSong); height: visible ? implicitHeight : 0 }
-        MMenuItem { symbol: "heart"; text: app.isLiked(window.menuItem.id || "")?"Remove from liked songs":"Like song"; visible: !!(window.menuItem.videoId || window.menuItem.localPath || window.menuItem.serverSong); onTriggered: app.toggleLike(window.menuItem) }
-        MMenuItem { objectName: "trackDetailsAction"; symbol: "more"; text: "Track details"; visible: !!(window.menuItem.videoId || window.menuItem.localPath || window.menuItem.serverSong); onTriggered: trackDetails.inspect(window.menuItem) }
-        MMenuItem { symbol: "plus"; text: "Add to playlist"; visible: !!(window.menuItem.videoId || window.menuItem.localPath || window.menuItem.serverSong); onTriggered: addPlaylistDialog.open() }
+        MMenuItem { text: "Open"; visible: !(window.menuItem.localPath || window.menuItem.qqMusicSong); onTriggered: app.open(window.menuItem) }
+        MMenuItem { objectName: "playKeepQueueAction"; symbol: "play"; text: "Play now, keep queue"; visible: !!(window.menuItem.localPath || window.menuItem.qqMusicSong); onTriggered: app.playKeepingQueue(window.menuItem) }
+        MMenuItem { symbol: "next"; text: "Play next"; visible: !!(window.menuItem.localPath || window.menuItem.qqMusicSong); onTriggered: app.enqueue(window.menuItem,true) }
+        MMenuItem { symbol: "queue"; text: "Add to queue"; visible: !!(window.menuItem.localPath || window.menuItem.qqMusicSong); onTriggered: app.enqueue(window.menuItem) }
+        MMenuItem { symbol: "radio"; text: "Play recommendations"; visible: window.menuItem.source==="qqmusic"; onTriggered: app.radio(window.menuItem) }
+        MMenuItem { objectName: "trimAction"; symbol: "volume"; text: "Adjust volume\u2026"; visible: !!(window.menuItem.localPath || window.menuItem.qqMusicSong); onTriggered: trimDialog.adjust(window.menuItem) }
+        MDivider { visible: !!(window.menuItem.localPath || window.menuItem.qqMusicSong); height: visible ? implicitHeight : 0 }
+        MMenuItem { symbol: "heart"; text: app.isLiked(window.menuItem.id || "")?"Remove from liked songs":"Like song"; visible: !!(window.menuItem.localPath || window.menuItem.qqMusicSong); onTriggered: app.toggleLike(window.menuItem) }
+        MMenuItem { objectName: "trackDetailsAction"; symbol: "more"; text: "Track details"; visible: !!(window.menuItem.localPath || window.menuItem.qqMusicSong); onTriggered: trackDetails.inspect(window.menuItem) }
+        MMenuItem { symbol: "plus"; text: "Add to local playlist"; visible: !!(window.menuItem.localPath || window.menuItem.qqMusicSong); onTriggered: addPlaylistDialog.open() }
         MMenuItem { symbol: "chevron"; text: "Go to artist"; visible: !!window.menuItem.artistId; onTriggered: app.open(window.relatedItem(window.menuItem,"artist")) }
         MMenuItem { text: "Artwork…"; visible: window.menuItem.id===app.current.id && !!app.current.id; onTriggered: artworkControls.open() }
         MMenuItem { symbol: "disc"; text: "Go to album"; visible: !!window.menuItem.albumId; onTriggered: app.open(window.relatedItem(window.menuItem,"album")) }
-        MMenuItem { text: ["subsonic","jellyfin"].indexOf(window.menuItem.source)>=0?"Copy song details":window.menuItem.localPath?"Copy file path":"Copy link"; onTriggered: app.copyLink(window.menuItem) }
-        MMenuItem { text: "Add to server playlist"; visible: !!window.menuItem.serverSong; enabled: app.server.connected; onTriggered: {window.batchItems=[];serverAddDialog.open()} }
-        MMenuItem { text: "Rate song"; visible: !!window.menuItem.serverSong && app.server.supportsRating; enabled: app.server.connected; onTriggered: serverRatingDialog.open() }
-        MMenuItem { text: "Remove from server playlist"; visible: app.serverPlaylistEditable && !window.menuQueue; onTriggered: app.removeServerRows([window.menuIndex]) }
-        MMenuItem { text: "Rename server playlist"; visible: ["subsonic","jellyfin"].indexOf(window.menuItem.source)>=0 && window.menuItem.kind==="playlist" && !!window.menuItem.editable; onTriggered: {serverName.text=window.menuItem.title;serverRenameDialog.open()} }
-        MMenuItem { text: "Delete server playlist"; visible: ["subsonic","jellyfin"].indexOf(window.menuItem.source)>=0 && window.menuItem.kind==="playlist" && !!window.menuItem.editable && (window.menuItem.source!=="jellyfin" || !!window.menuItem.deletable); onTriggered: serverDeleteDialog.open() }
+        MMenuItem { text: window.menuItem.localPath?"Copy file path":"Copy link"; onTriggered: app.copyLink(window.menuItem) }
         MMenuItem { symbol: "folder"; text: "Locate file…"; visible: !!window.menuItem.localPath; onTriggered: window.openFileDialog("locate") }
         MMenuItem { text: "Remove from local files"; visible: app.libraryId==="files" && !!window.menuItem.localPath && !window.menuQueue; onTriggered: app.removeLocalFile(window.menuItem.id) }
         MDivider { visible: window.menuQueue || window.editableLocal; height: visible?implicitHeight:0 }
@@ -2136,7 +2170,7 @@ ApplicationWindow {
     Onboarding {
         id: onboarding; objectName: "onboarding"
         onBrowseRequested: {window.folderPickForOnboarding=true;window.openFileDialog("folder");}
-        onServerRequested: serverConnection.open()
+        onQqMusicRequested: qqMusicLogin.open()
     }
     MDialog {
         id: musicFolderEntry; objectName: "musicFolderEntry"; anchors.centerIn: parent
@@ -2230,7 +2264,7 @@ ApplicationWindow {
         onAccepted: { if(window.playlistAction==="queue")app.saveQueue(playlistName.text);else if(window.playlistAction==="rename")app.renamePlaylist(window.editPlaylistId,playlistName.text);else {const id=app.createPlaylist(playlistName.text);if(id&&window.playlistAction==="add"){if(window.batchItems.length)app.addItemsToPlaylist(id,window.batchItems);else app.addToPlaylist(id,window.menuItem);}} }
     }
     MDialog {
-        id: addPlaylistDialog; objectName: "addPlaylistDialog"; anchors.centerIn: parent; width: 360; height: Math.min(window.height-64,Math.min(500,268+app.playlists.length*52)); modal: true; title: "Add to playlist"; standardButtons: Dialog.Cancel
+        id: addPlaylistDialog; objectName: "addPlaylistDialog"; anchors.centerIn: parent; width: 360; height: Math.min(window.height-64,Math.min(500,268+app.playlists.length*52)); modal: true; title: "Add to local playlist"; standardButtons: Dialog.Cancel
         palette.windowText: Theme.text
         property bool contentReady: false
         onAboutToShow: contentReady=true
@@ -2240,7 +2274,6 @@ ApplicationWindow {
         ColumnLayout {
             anchors.fill: parent
             ListView { objectName: "playlistChoices"; Layout.fillWidth: true; Layout.fillHeight: true; Layout.minimumHeight: Math.min(52,app.playlists.length*52); clip: true; model: app.playlists.filter(p=>!p.smart); delegate: MButton { objectName: "playlistChoice"; required property var modelData; width: ListView.view.width; text: modelData.title; leftAligned: true; onClicked: {const playlistId=modelData.id;addPlaylistDialog.close();window.addPlaylistSelection(playlistId);} } }
-            MButton { Layout.fillWidth: true; text: "Server playlist…"; visible: app.server.connected; onClicked: {addPlaylistDialog.close();serverAddDialog.open()} }
             MButton { Layout.fillWidth: true; text: "New playlist"; symbol: "plus"; tonal: true; onClicked: {addPlaylistDialog.close();window.playlistAction="add";playlistName.clear();playlistDialog.open();} }
         }
             }
@@ -2254,31 +2287,9 @@ ApplicationWindow {
         palette.windowText: Theme.text; palette.buttonText: Theme.text
         onAccepted: {app.deletePlaylist(window.editPlaylistId);window.localPlaylist="";}
     }
-    MDialog {
-        id: serverAddDialog; objectName: "serverAddDialog"; anchors.centerIn: parent; width: 380; height: Math.min(window.height-64,420); modal: true; title: "Add to server playlist"; standardButtons: Dialog.Cancel
-        ListView { anchors.fill: parent; clip: true; model: app.server.playlists
-            delegate: MButton { required property var modelData; width: ListView.view.width; text: modelData.title; leftAligned: true; enabled: !!modelData.editable; onClicked: {app.addServerPlaylist(modelData.remoteId,window.batchItems.length?window.batchItems:[window.menuItem]);serverAddDialog.close()} }
-            SungText { anchors.centerIn: parent; visible: app.server.playlists.length===0; text: "Create a playlist in Music server"; color: Theme.muted }
-        }
-    }
-    MDialog {
-        id: serverRenameDialog; objectName: "serverRenameDialog"; initialFocus: serverName; acceptText: "Save"; anchors.centerIn: parent; width: 360; modal: true; title: "Rename server playlist"; standardButtons: Dialog.Save | Dialog.Cancel; acceptEnabled: serverName.text.trim().length>0
-        MTextField { id: serverName; width: parent.width; label: "Playlist name"; maximumLength:120; onAccepted: if(serverRenameDialog.acceptEnabled)serverRenameDialog.accept() }
-        onAccepted: app.renameServerPlaylist(window.menuItem,serverName.text)
-    }
-    MDialog {
-        id: serverDeleteDialog; objectName: "serverDeleteDialog"; acceptText: "Delete"; anchors.centerIn: parent; width: 360; modal: true; title: "Delete server playlist?"; standardButtons: Dialog.Ok | Dialog.Cancel
-        SungText { width: parent.width; text: "This removes the playlist from your server. Songs are kept."; wrapMode: Text.Wrap }
-        onAccepted: app.deleteServerPlaylist(window.menuItem)
-    }
-    MDialog {
-        id: serverRatingDialog; objectName: "serverRatingDialog"; anchors.centerIn: parent; width: 380; modal: true; title: "Rate song"; standardButtons: Dialog.Cancel
-        Column { width: parent.width; spacing: 8
-            Row { anchors.horizontalCenter: parent.horizontalCenter; spacing: 8; Repeater { model:5; MButton { required property int index; objectName: "rating_"+(index+1); text:String(index+1); tip: "Rate " + (index+1) + " out of 5"; width: 48; selected: window.menuItem.rating===index+1; onClicked:{app.rateServerSong(window.menuItem,index+1);serverRatingDialog.close()} } } }
-            MButton { objectName: "clearRatingButton"; anchors.horizontalCenter: parent.horizontalCenter; text: "Clear rating"; enabled: !!window.menuItem.rating; onClicked: {app.rateServerSong(window.menuItem,0);serverRatingDialog.close()} }
-        }
-    }
-    ServerConnection { id: serverConnection }
+
+
+    QQMusicLogin { id: qqMusicLogin }
     MDialog {
         id: settingsDialog; objectName: "settingsDialog"; width: fitPanes(880); height: fitHeight(740); modal: true; title: "Settings"
         padding: 24
@@ -2346,7 +2357,7 @@ ApplicationWindow {
                     Layout.fillWidth:true;Layout.minimumWidth:0; spacing:12
                     // Every control term below must also appear here, or its
                     // parent disappears before Settings can show the match.
-                    property bool hasMatches: settingsDialog.matches("Navigation top bar sidebar rail destinations") || settingsDialog.matches("Appearance theme system Noctalia light dark") || settingsDialog.matches("Appearance artwork accent color") || settingsDialog.matches("Accent color source palette") || settingsDialog.matches("Ambient artwork backdrop immersive now playing") || settingsDialog.matches("Backdrop follows the music audio") || settingsDialog.matches("Album covers for music videos YouTube Apple Music") || settingsDialog.matches("Color scheme variant neutral tonal spot vibrant expressive content") || settingsDialog.matches("Contrast standard medium high accessibility") || settingsDialog.matches("Density compact comfortable spacing") || settingsDialog.matches("Pointer density precise mouse touch target") || settingsDialog.matches("Current view layout density grid list") || (!!app.current.id && settingsDialog.matches("Current artwork")) || settingsDialog.matches("Animated album artwork") || settingsDialog.matches("Online animated covers YouTube Apple Music") || settingsDialog.matches("Motion layout video quality auto 1080p 2K 4K animated cover") || settingsDialog.matches("Animations") || settingsDialog.matches("Poster-style lyrics Google Sans Flex stretch font current line")
+                    property bool hasMatches: settingsDialog.matches("Navigation top bar sidebar rail destinations") || settingsDialog.matches("Appearance theme system Noctalia light dark") || settingsDialog.matches("Appearance artwork accent color") || settingsDialog.matches("Accent color source palette") || settingsDialog.matches("Ambient artwork backdrop immersive now playing") || settingsDialog.matches("Backdrop follows the music audio") || settingsDialog.matches("Color scheme variant neutral tonal spot vibrant expressive content") || settingsDialog.matches("Contrast standard medium high accessibility") || settingsDialog.matches("Density compact comfortable spacing") || settingsDialog.matches("Pointer density precise mouse touch target") || settingsDialog.matches("Current view layout density grid list") || (!!app.current.id && settingsDialog.matches("Current artwork")) || settingsDialog.matches("Animated album artwork") || settingsDialog.matches("Motion layout video quality auto 1080p 2K 4K animated cover") || settingsDialog.matches("Animations") || settingsDialog.matches("Poster-style lyrics Google Sans Flex stretch font current line")
                     visible: settingsDialog.searchQuery.trim() ? hasMatches : settingsDialog.category===0
                     SungText {objectName:"settingsAppearanceHeading";heading: true;visible:!!settingsDialog.searchQuery.trim();text:"Appearance";font.pixelSize:Theme.titleLarge;emphasized: true;Layout.bottomMargin:8}
                     ColumnLayout {id:options0;objectName:"settingsRows0";Layout.fillWidth:true;Layout.minimumWidth:0;spacing:12
@@ -2408,15 +2419,14 @@ ApplicationWindow {
                 MSettingRow {opens:true;objectName:"viewLayoutButton";text:"Current view layout";visible:settingsDialog.matches("Current view layout density grid list");onClicked:{settingsDialog.close();viewLayoutDialog.open();}}
                 MSettingRow {opens:true;text:"Current artwork";visible:!!app.current.id && settingsDialog.matches("Current artwork");onClicked:{settingsDialog.close();artworkControls.open();}}
                 MSwitch { Layout.fillWidth:true;Layout.minimumWidth:0; objectName: "animatedArtworkSwitch"; visible: settingsDialog.matches("Animated album artwork"); text: "Animated album artwork"; checked: app.animatedArtwork; onToggled: app.animatedArtwork=checked }
-                MSwitch { Layout.fillWidth:true;Layout.minimumWidth:0; objectName: "onlineArtworkSwitch"; visible: settingsDialog.matches("Online animated covers YouTube Apple Music"); text: "Online animated covers"; checked: app.onlineArtwork; onToggled: app.onlineArtwork=checked }
+
                 // The Motion layout fills the window with the animated cover.
-                // A larger one is sharper and costs more to decode; Apple's
-                // sizes and what each costs are in helper/online_artwork.py.
+                // The decode resolution balances detail and memory for local covers.
                 SungText {text:"Motion layout video";visible:settingsDialog.matches("Motion layout video quality auto 1080p 2K 4K animated cover");font.pixelSize:Theme.bodyLarge;emphasized:true;Layout.topMargin:4}
                 MSegmentedControl {Layout.fillWidth:true;Layout.minimumWidth:0;
                     objectName:"motionQualityControl"
                     visible:settingsDialog.matches("Motion layout video quality auto 1080p 2K 4K animated cover")
-                    enabled:app.motion && app.animatedArtwork && app.onlineArtwork
+                    enabled:app.motion && app.animatedArtwork
                     accessibleName:"Motion layout video"
                     options:[{key:0,label:"Auto",name:"motionQualityAuto"},
                              {key:1080,label:"1080p",name:"motionQuality1080"},
@@ -2424,7 +2434,7 @@ ApplicationWindow {
                              {key:2160,label:"4K",name:"motionQuality2160"}]
                     value:app.motionQuality; onChosen:value=>app.motionQuality=value
                 }
-                MSwitch { Layout.fillWidth:true;Layout.minimumWidth:0; objectName: "albumCoversSwitch"; visible: settingsDialog.matches("Album covers for music videos YouTube Apple Music"); text: "Album covers for music videos"; checked: app.albumCovers; onToggled: app.albumCovers=checked }
+
                 MSwitch { Layout.fillWidth:true;Layout.minimumWidth:0; visible: settingsDialog.matches("Animations"); text: "Animations"; checked: app.motion; onToggled: app.motion=checked }
                 // Off unless chosen: some listeners want the words to hold still.
                 MSwitch { Layout.fillWidth:true;Layout.minimumWidth:0; objectName: "posterLyricsSwitch"; visible: settingsDialog.matches("Poster-style lyrics Google Sans Flex stretch font current line"); text: "Poster-style lyrics"; checked: app.posterLyrics; onToggled: app.posterLyrics=checked }
@@ -2433,11 +2443,12 @@ ApplicationWindow {
                 ColumnLayout {
                     id: settingsGroup1; objectName:"settingsGroup1"
                     Layout.fillWidth:true;Layout.minimumWidth:0; spacing:12
-                    property bool hasMatches: settingsDialog.matches("Autoplay similar songs") || settingsDialog.matches("Track notifications") || settingsDialog.matches("Volume step") || settingsDialog.matches("Playback speed rate") || settingsDialog.matches("Sleep timer") || settingsDialog.matches("Pause headphones audio output disconnects") || settingsDialog.matches("Audio output device speakers headphones") || settingsDialog.matches("Prepare next track") || settingsDialog.matches("Gapless playback join pause between songs") || settingsDialog.matches("Crossfade overlap songs fade") || settingsDialog.matches("Volume normalization loudness level ReplayGain") || settingsDialog.matches("Resume recordings over 20 minutes mixes sets position") || settingsDialog.matches("Find missing lyrics on LRCLIB") || settingsDialog.matches("Sleep timer fade out volume")
+                    property bool hasMatches: settingsDialog.matches("Keep playing when window closes background tray") || settingsDialog.matches("Autoplay similar songs") || settingsDialog.matches("Track notifications") || settingsDialog.matches("Volume step") || settingsDialog.matches("Playback speed rate") || settingsDialog.matches("Sleep timer") || settingsDialog.matches("Pause headphones audio output disconnects") || settingsDialog.matches("Audio output device speakers headphones") || settingsDialog.matches("Prepare next track") || settingsDialog.matches("Gapless playback join pause between songs") || settingsDialog.matches("Crossfade overlap songs fade") || settingsDialog.matches("Volume normalization loudness level ReplayGain") || settingsDialog.matches("Resume recordings over 20 minutes mixes sets position") || settingsDialog.matches("Sleep timer fade out volume")
                     visible: settingsDialog.searchQuery.trim() ? hasMatches : settingsDialog.category===1
                     SungText {objectName:"settingsPlaybackHeading";heading: true;visible:!!settingsDialog.searchQuery.trim();text:"Playback";font.pixelSize:Theme.titleLarge;emphasized: true;Layout.bottomMargin:8}
                     ColumnLayout {id:options1;objectName:"settingsRows1";Layout.fillWidth:true;Layout.minimumWidth:0;spacing:12
                 MSwitch { Layout.fillWidth:true;Layout.minimumWidth:0; visible: settingsDialog.matches("Autoplay similar songs"); text: "Autoplay similar songs"; checked: app.autoplay; onToggled: app.autoplay=checked }
+                MSwitch { objectName:"closeToTraySwitch";Layout.fillWidth:true;Layout.minimumWidth:0;text:"Keep playing when window closes";checked:app.closeToTray;onToggled:app.closeToTray=checked;visible:settingsDialog.matches("Keep playing when window closes background tray") }
                 MSwitch { Layout.fillWidth:true;Layout.minimumWidth:0; visible: settingsDialog.matches("Track notifications"); objectName: "trackNotificationsSwitch"; text: "Track notifications"; checked: app.trackNotifications; onToggled: app.trackNotifications=checked }
                 RowLayout { visible: settingsDialog.matches("Volume step"); Layout.fillWidth: true;Layout.minimumWidth:0; SungText { text: "Volume step"; font.pixelSize: Theme.bodyLarge; Layout.fillWidth: true } MButton { objectName: "volumeStepButton"; text: app.volumeStep+"%"; tonal: true; onClicked: volumeStepMenu.popup(this,width-volumeStepMenu.width,height+4) } }
                 RowLayout { visible: settingsDialog.matches("Playback speed rate"); Layout.fillWidth: true;Layout.minimumWidth:0; SungText { text: "Playback speed"; font.pixelSize: Theme.bodyLarge; Layout.fillWidth: true } MButton { objectName: "playbackSpeedButton"; text: Number(app.playbackRate.toFixed(2))+"×"; tonal: true; onClicked: rateDialog.open() } }
@@ -2466,20 +2477,20 @@ ApplicationWindow {
                     SungText { text: "Songs overlap as one ends and the next begins, except inside an album and into an autoplay suggestion, which are joined instead."; color: Theme.muted; font.pixelSize: Theme.bodyMedium; Layout.fillWidth: true; wrapMode: Text.Wrap; visible: app.crossfadeSeconds>0 }
                 }
                 MSwitch { Layout.fillWidth:true;Layout.minimumWidth:0; visible: settingsDialog.matches("Prepare next track"); text: "Prepare next track"; hint: "Resolves and buffers the next song while the current one plays, which is what makes the join between them immediate."; checked: app.prepareNext; onToggled: app.prepareNext=checked }
-                MSwitch { Layout.fillWidth:true;Layout.minimumWidth:0; visible: settingsDialog.matches("Find missing lyrics on LRCLIB"); text: "Find missing lyrics on LRCLIB"; hint: "Songs with no lyrics of their own are looked up on LRCLIB, which sends the title and artist to that service."; checked: app.lyricsFallback; onToggled: app.lyricsFallback=checked }
+
                     }
                 }
                 ColumnLayout {
                     id: settingsGroup2; objectName:"settingsGroup2"
                     Layout.fillWidth:true;Layout.minimumWidth:0; spacing:12
-                    property bool hasMatches: settingsDialog.matches("Music folders import manage") || settingsDialog.matches("Update music folders automatically watch") || settingsDialog.matches("Start page Home local music server liked") || settingsDialog.matches("Customize Home sections order") || settingsDialog.matches("Listening sessions saved queues") || settingsDialog.matches("Listening statistics top artists albums time")
+                    property bool hasMatches: settingsDialog.matches("Music folders import manage") || settingsDialog.matches("Update music folders automatically watch") || settingsDialog.matches("Start page Home local music liked") || settingsDialog.matches("Customize Home sections order") || settingsDialog.matches("Listening sessions saved queues") || settingsDialog.matches("Listening statistics top artists albums time")
                     visible: settingsDialog.searchQuery.trim() ? hasMatches : settingsDialog.category===2
                     SungText {objectName:"settingsLibraryHeading";heading: true;visible:!!settingsDialog.searchQuery.trim();text:"Library";font.pixelSize:Theme.titleLarge;emphasized: true;Layout.bottomMargin:8}
                     ColumnLayout {id:options2;objectName:"settingsRows2";Layout.fillWidth:true;Layout.minimumWidth:0;spacing:12
                 MSettingRow {opens:true;text:"Music folders";visible:settingsDialog.matches("Music folders import manage");onClicked:{settingsDialog.close();musicFoldersDialog.open();}}
                 MSwitch { Layout.fillWidth:true;Layout.minimumWidth:0; text: "Update music folders automatically"; visible: settingsDialog.matches("Update music folders automatically watch"); checked: app.watchMusicFolders; onToggled: app.watchMusicFolders=checked }
-                SungText {text:"Start page";visible:settingsDialog.matches("Start page Home local music server liked");font.pixelSize:Theme.titleMedium;typeRole:"titleMedium"}
-                MSegmentedControl {Layout.fillWidth:true;Layout.minimumWidth:0;visible:settingsDialog.matches("Start page Home local music server liked");accessibleName:"Start page"; options:[{key:"home",label:"Home",name:"startPage_home"},{key:"files",label:"Local",name:"startPage_files"},{key:"server",label:"Server",name:"startPage_server"},{key:"favorites",label:"Liked",name:"startPage_favorites"}];value:app.startPage;onChosen:value=>app.startPage=value}
+                SungText {text:"Start page";visible:settingsDialog.matches("Start page Home local music liked");font.pixelSize:Theme.titleMedium;typeRole:"titleMedium"}
+                MSegmentedControl {Layout.fillWidth:true;Layout.minimumWidth:0;visible:settingsDialog.matches("Start page Home local music liked");accessibleName:"Start page"; options:[{key:"home",label:"Home",name:"startPage_home"},{key:"files",label:"Local",name:"startPage_files"},{key:"favorites",label:"Liked",name:"startPage_favorites"}];value:app.startPage;onChosen:value=>app.startPage=value}
                 MSettingRow {opens:true;text:"Customize Home";visible:settingsDialog.matches("Customize Home sections order");onClicked:{settingsDialog.close();app.home();homeEditor.open();}}
                 MSettingRow {opens:true;objectName:"sessionsButton";text:"Listening sessions";visible:settingsDialog.matches("Listening sessions saved queues");onClicked:{settingsDialog.close();sessionsDialog.open();}}
                 MSettingRow {opens:true;objectName:"listeningStatsButton";text:"Listening statistics";visible:settingsDialog.matches("Listening statistics top artists albums time");onClicked:{settingsDialog.close();statsDialog.open();}}
@@ -2500,24 +2511,18 @@ ApplicationWindow {
                 ColumnLayout {
                     id: settingsGroup3; objectName:"settingsGroup3"
                     Layout.fillWidth:true;Layout.minimumWidth:0; spacing:12
-                    property bool hasMatches: settingsDialog.matches("Music server library Subsonic Jellyfin Cider Apple Music") || settingsDialog.matches("YouTube cookies import replace remove sign in") || settingsDialog.matches("YouTube streaming quality standard data saver bitrate")
+                    property bool hasMatches: settingsDialog.matches("QQ Music QQMusic credentials login QR scan sign in import remove")
                     visible: settingsDialog.searchQuery.trim() ? hasMatches : settingsDialog.category===4
                     SungText {objectName:"settingsConnectionsHeading";heading: true;visible:!!settingsDialog.searchQuery.trim();text:"Connections";font.pixelSize:Theme.titleLarge;emphasized: true;Layout.bottomMargin:8}
                     ColumnLayout {id:options3;objectName:"settingsRows3";Layout.fillWidth:true;Layout.minimumWidth:0;spacing:12
-                MSettingRow {opens:true;objectName:"musicServerButton";text:"Music server";visible:settingsDialog.matches("Music server library Subsonic Jellyfin Cider Apple Music");onClicked:{settingsDialog.close();serverConnection.open()}}
-                SungText {objectName:"youtubeGroupHeading"; visible: settingsDialog.matches("YouTube cookies import replace remove sign in") || settingsDialog.matches("YouTube streaming quality standard data saver bitrate"); text: "YouTube"; font.pixelSize: Theme.labelLarge; labelRole: true; color: Theme.muted; Layout.topMargin: 12 }
-                SungText { visible: settingsDialog.matches("YouTube streaming quality standard data saver bitrate"); text: "Streaming quality"; font.pixelSize: Theme.titleMedium; typeRole:"titleMedium" }
-                MSegmentedControl {Layout.fillWidth:true;Layout.minimumWidth:0;
-                    objectName:"streamingQualityControl"
-                    visible: settingsDialog.matches("YouTube streaming quality standard data saver bitrate")
-                    accessibleName:"Streaming quality"
-                    options:[{key:"standard",label:"Standard",name:"qualityStandard"},
-                             {key:"saver",label:"Data saver",name:"qualitySaver"}]
-                    value:app.streamingQuality; onChosen:value=>app.streamingQuality=value
-                }
-                MSettingRow {opens:true;objectName:"cookieButton";text:app.cookies?"Replace cookies":"Import cookies";visible:settingsDialog.matches("YouTube cookies import replace remove sign in");onClicked:window.openFileDialog("cookies")}
-                MSettingRow {text:"Remove cookies";visible:!!app.cookies && settingsDialog.matches("YouTube cookies import replace remove sign in");onClicked:app.clearCookies()}
-                SungText { visible: settingsDialog.matches("YouTube cookies import replace remove sign in"); text: "Optional cookies.txt for tracks that require sign-in. Your library stays on this device."; wrapMode: Text.Wrap; Layout.fillWidth: true;Layout.minimumWidth:0; color: Theme.muted; font.pixelSize: Theme.bodyMedium }
+
+                SungText { text: "QQ Music"; visible: settingsDialog.matches("QQ Music QQMusic credentials login QR scan sign in import remove"); font.pixelSize: Theme.labelLarge; labelRole: true; color: Theme.muted; Layout.topMargin: 12 }
+                MSettingRow { opens: true; objectName: "qqMusicLoginButton"; text: app.qqMusicCredential ? "Sign in to QQ Music again" : "Sign in to QQ Music"; visible: settingsDialog.matches("QQ Music QQMusic credentials login QR scan sign in import remove"); onClicked: {settingsDialog.close();qqMusicLogin.open()} }
+                MSettingRow { opens: true; objectName: "qqMusicCredentialButton"; text: app.qqMusicCredential ? "Replace QQ Music credentials" : "Import QQ Music credentials"; visible: settingsDialog.matches("QQ Music QQMusic credentials login QR scan sign in import remove"); onClicked: window.openFileDialog("qqmusic-credential") }
+                MSettingRow { text: "Remove QQ Music credentials"; visible: app.qqMusicCredential && settingsDialog.matches("QQ Music QQMusic credentials login QR scan sign in import remove"); onClicked: app.clearQQMusicCredential() }
+                SungText { text: (app.qqMusicCredential ? "Credentials saved on this device. " : "Sign in by scanning a QR code, or import credentials. ") + "Availability depends on your account and region. Audio uses MP3 128 kbps."; visible: settingsDialog.matches("QQ Music QQMusic credentials login QR scan sign in import remove"); wrapMode: Text.Wrap; Layout.fillWidth: true; Layout.minimumWidth: 0; color: Theme.muted; font.pixelSize: Theme.bodyMedium }
+
+
                     }
                 }
                 ColumnLayout {
@@ -2592,7 +2597,7 @@ ApplicationWindow {
         // Material has a pair of roles for this and nothing else in the app
         // wears them: an error is the one thing on screen that should not look
         // like everything else.
-        radius: Theme.shapeLarge; color: Theme.errorContainer; visible: !!app.error && !window.modalOpen; z: 50
+        radius: Theme.shapeLarge; color: Theme.errorContainer; visible: !!app.error && !window.modalOpen && !(app.homeError && app.homeSections(true).length===0); z: 50
         // Qt 6.8 Accessible.announce reports a changed error once. A dialog
         // can hide the bar without making the same error a new announcement.
         Accessible.role: Accessible.AlertMessage
@@ -2662,11 +2667,10 @@ ApplicationWindow {
             Qt.callLater(window.restoreView);if(window.albumFlying && !window.albumOpening && !app.busy)albumSettle.restart();
             if(!app.collection.query && app.collection.sortKey==="original")window.collectionTools=false;
             if(app.page==="home"){window.destination="home";window.localPlaylist="";searchField.clear();app.clearListPane();}
-            else if(app.page==="server"){window.destination="library";window.libraryTab="server";window.localPlaylist="";searchField.suggestions=[];searchField.text=app.serverRequest.query || "";}
             else if(app.page==="library" || app.page==="local" || app.page==="local-album" || app.page==="local-artist"){
                 window.destination="library";
                 window.localPlaylist=app.page==="local"?app.libraryId:"";
-                if(app.libraryId)window.libraryTab=app.page==="local"?"playlists":app.libraryId;
+                if(app.libraryId)window.libraryTab=app.page==="local"?"local-playlists":app.libraryId;
             }else{window.destination="search";window.localPlaylist="";}
             if(app.page==="search" && app.query){searchField.text=app.query;window.filter=app.searchFilter;}
         } }

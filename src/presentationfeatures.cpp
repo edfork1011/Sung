@@ -3,11 +3,12 @@
 
 void Backend::setCompactDensity(bool value){if(value==compactDensity())return;m_settings.setValue("compactDensity",value);emit presentationChanged();}
 void Backend::setSidebarNavigation(bool value){if(value==sidebarNavigation())return;m_settings.setValue("sidebarNavigation",value);emit presentationChanged();}
-void Backend::setStartPage(const QString &value){if(!QStringList{"home","files","server","favorites"}.contains(value)||value==startPage())return;m_settings.setValue("startPage",value);emit presentationChanged();}
-void Backend::openStartPage(){const auto page=startPage();if(page=="files"||page=="favorites"||page=="server")library(page);else home();}
+void Backend::setStartPage(const QString &value){if(!QStringList{"home","files","favorites"}.contains(value)||value==startPage())return;m_settings.setValue("startPage",value);emit presentationChanged();}
+void Backend::openStartPage(){const auto page=startPage();if(page=="files"||page=="favorites")library(page);else home();}
 QVariantList Backend::homeSections(bool includeHidden) const {
   if(m_page!="home")return m_sections;
-  auto sections=m_sections;const auto pinned=pins();
+  auto sections=m_sections;auto pinned=pins();
+  if(m_request.value("source")=="qqmusic")pinned.removeIf([](const QVariant &item){return item.toMap().value("source")!="qqmusic";});
   if(!pinned.isEmpty())sections.prepend(QVariantMap{{"title","Pinned"},{"items",pinned}});
   const auto order=homeOrder(),hidden=hiddenHomeSections();
   std::stable_sort(sections.begin(),sections.end(),[&](const QVariant &a,const QVariant &b){
@@ -42,11 +43,11 @@ void Backend::setViewDensity(int value){
   auto layouts=m_settings.value("viewLayouts").toMap(),options=layouts.value(m_viewKey).toMap();options["density"]=value;layouts[m_viewKey]=options;
   while(layouts.size()>64){auto it=layouts.begin();if(it.key()==m_viewKey)++it;layouts.erase(it);}m_settings.setValue("viewLayouts",layouts);emit presentationChanged();
 }
-bool Backend::viewSupportsGrid() const {return m_page=="library" && (m_libraryId=="local-albums" || m_libraryId=="local-artists" || m_libraryId=="playlists");}
+bool Backend::viewSupportsGrid() const {return m_page=="library" && (m_libraryId=="local-albums" || m_libraryId=="local-artists" || m_libraryId=="playlists" || m_libraryId=="local-playlists");}
 QString Backend::viewMode() const {
   if(!viewSupportsGrid())return "list";
   const auto value=m_settings.value("viewLayouts").toMap().value(m_viewKey).toMap().value("mode").toString();
-  return value=="grid"||value=="list"?value:m_libraryId=="playlists"?"list":"grid";
+  return value=="grid"||value=="list"?value:(m_libraryId=="playlists" || m_libraryId=="local-playlists")?"list":"grid";
 }
 void Backend::setViewMode(const QString &value){
   if(!viewSupportsGrid() || (value!="grid"&&value!="list") || value==viewMode())return;

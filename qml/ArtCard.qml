@@ -17,7 +17,7 @@ Item {
     // is opened, so the backend reports it as -1; a card says nothing rather
     // than printing that.
     readonly property string countLabel: track.count >= 0 ? track.count + (track.count === 1 ? " track" : " tracks") : ""
-    readonly property bool playableCover: !!(track.videoId || track.localPath || track.serverSong) || ["album","playlist","local","local-album","local-artist"].indexOf(track.kind)>=0
+    readonly property bool playableCover: !!(track.localPath || track.qqMusicSong) || ["album","playlist","local","local-album","local-artist"].indexOf(track.kind)>=0
     readonly property bool loadingCover: !!app.coverPlayId && app.coverPlayId===(track.browseId || track.id || "")
     width: 180; height: width + 68
     // Hidden while pooled: a culled delegate still takes Tab (TrackRow.qml).
@@ -54,7 +54,7 @@ Item {
         tip: selected?"Unpin from Home":"Pin to Home"
         // Keep the contextual action in the tab order while focus crosses
         // from the cover to its other action, then hide it when focus leaves.
-        visible: !String(card.track.kind).startsWith("local-") && !(card.track.videoId || card.track.localPath) && (hover.hovered || openCard.activeFocus || cardAction.activeFocus || activeFocus || selected)
+        visible: !String(card.track.kind).startsWith("local-") && !(card.track.localPath || card.track.qqMusicSong) && (hover.hovered || openCard.activeFocus || cardAction.activeFocus || activeFocus || selected)
         onClicked: app.togglePin(card.track)
     }
     MatchText { anchors.top: art.bottom; anchors.topMargin: 12; width: parent.width; revealFocused: openCard.activeFocus; sourceText: card.track.title || ""; font.pixelSize: Theme.bodyLarge; emphasized: true }

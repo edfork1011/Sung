@@ -1,6 +1,6 @@
 # Sung
 
-A native Linux music player: C++20, Qt 6 Quick, CMake and Ninja. Material 3
+A native QQ Music client with local media: C++20, Qt 6 Quick, CMake and Ninja. Material 3
 throughout. Targets CachyOS on Wayland.
 
 These are hard rules, not preferences. If one of them makes a task larger than
@@ -119,8 +119,7 @@ python3 tests/profile.py build/sung          # idle UI: CPU, RSS, PSS, binary si
 python3 tests/profile.py build/sung --mini   # same for the mini player
 ```
 
-`tests/verify.py` runs both as stages and records the diagnostic binary size in
-its report.
+Run these probes separately from the unit and UI stages to avoid contention.
 
 ## Tech debt
 
@@ -242,47 +241,25 @@ scripts/test.sh                               # unit and Python tests
 scripts/verify.sh --offline                   # every stage, screenshots included
 ```
 
-`SUNG_DIAGNOSTICS` gates the harness; the shipped binary does not carry it. A
-stage is a `--something-test` flag on the diagnostic binary, registered in
-`src/main.cpp`, declared in `tests/uitest.h` and listed in `tests/verify.py`. A
-new feature gets its assertions in an existing stage where one fits, and a new
-stage where it does not.
+`SUNG_DIAGNOSTICS` gates the QQ Music UI stage; the shipped binary does not
+carry it. The `--qqmusic-ui-test` flag is registered in `src/main.cpp` and
+implemented in `tests/qqmusic_ui.cpp`. The native `--desktop-ui-test` stage
+is driven by `tests/desktop_session.py` against Caelestia and its system tray.
+The QQ Music stage covers recommendations, search,
+playback, account library navigation, sign-out and the QR login dialog.
 
-A run is green when `verify-out/report.json` says `passed: true`. Offline runs
-legitimately skip the live streaming stages; nothing else may be skipped.
+The verification runner writes `verification/qqmusic-only/summary.json`, logs
+and screenshots. Its API responses are deterministic fixtures; it does not
+contact a real account. Report live API checks separately. Use
+`tests/catalog_fixture.py` for offline transport, with isolated XDG folders,
+`SUNG_QQ_ACCOUNT_STATE` for fixture account state and `SUNG_TEST_OUTPUT` for
+captures. Never use the owner's credential file in a mutation test.
 
-The full run takes twenty to thirty minutes. Never start it on your own. It
-runs only when the user asks for it. Before a push, offer it and say what the
-change touched, then push without it if the answer is no; the decision is the
-user's each time and a previous yes does not carry over. Day to day, run
-`scripts/test.sh` and the single stage that covers the change. The checklist
-above still applies to every feature: write the stage as the feature is built,
-so the run has something to find whenever it is asked for.
-
-## Harness notes
-
-Run one stage by hand with the environment `tests/verify.py` sets: an
-isolated `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and `XDG_CACHE_HOME`, the offscreen
-software renderer, a `FONTCONFIG_FILE` naming the Google Sans Flex directory,
-`SUNG_HELPER=tests/catalog_fixture.py` and `SUNG_TEST_OUTPUT` for the
-screenshots, then `build-diag/sung --isolated --<name>-test`. Run stages one at
-a time; several at once, or beside `scripts/test.sh`, starve each other into
-their own timeouts.
-
-- An unrecognised `--x-test` flag falls through to a normal launch and exits
-  0, which reads as a pass. Check the flag against `src/main.cpp` and check
-  that screenshots landed.
-- `console.log` from QML prints nothing under the harness. Prove a component
-  ran from C++ in the stage, with `findItem` and a property read.
-- `--interface-audit-test` allows one explanatory paragraph across all of
-  Settings. A new setting gets a label that explains itself.
-- Some stages fail now and then on an unchanged build, mostly frame-sampled
-  motion checks and focus reveals that have 200 ms to land. Rerun the base
-  build three times on an idle machine before calling a difference a
-  regression. The same goes for `--tour` screenshots, which differ by
-  thousands of pixels between two runs of one binary.
-- `tests/benchmark.py` leaves a 115 MB `silence.wav` in every output folder.
-  Delete it after each run.
+Run the full verification runner only when the user asks for it. Day to day,
+run the unit tests and the affected UI stage. Run stages one at a time so
+rendering and media timing assertions do not compete for resources. An unknown
+test flag falls through to a normal launch; verify that the flag exists and
+that the stage writes its result and screenshots.
 
 ## Measuring
 
@@ -321,7 +298,7 @@ into the process by the driver, so measure memory on the desktop too.
 - `src/` backend, colour and shape engines, the image provider, `main.cpp`.
 - `qml/` the interface. `Theme.qml` holds every design token; components are
   prefixed `M` when they implement a Material component.
-- `tests/` the harness, the stages, the fixtures, `verify.py`, `profile.py`.
+- `tests/` the QQ Music UI stage, native and Python tests, fixtures, `verify.py`, `profile.py`.
 - `assets/icons/` Material Symbols Rounded, at three optical sizes.
-- `helper/` the Python side for catalogue and artwork.
+- `helper/` the QQ Music API adapter, QR login and local media importer.
 - `scripts/` build, run, install and verification entry points.

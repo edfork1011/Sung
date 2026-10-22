@@ -25,15 +25,12 @@ QString OfflineStore::keyFor(const QVariantMap &track, const QString &quality) {
   if (!track.value("localPath").toString().isEmpty())
     return {};
   const auto source = track.value("source").toString();
-  if (source == "jellyfin" || source == "subsonic") {
-    const auto id = track.value("id").toString();
-    const auto server = track.value("server").toString();
-    if (id.isEmpty() || server.isEmpty())
-      return {};
-    return source + '|' + server + '|' + id + '|' + quality;
+  if(source=="qqmusic") {
+    const auto id=track.value("remoteId").toString();
+    return id.isEmpty()?QString():"qqmusic|"+id+"|mp3_128";
   }
-  const auto video = track.value("videoId").toString();
-  return video.isEmpty() ? QString() : "yt|" + video + '|' + quality;
+  Q_UNUSED(quality);
+  return {};
 }
 
 bool OfflineStore::has(const QString &key) const {

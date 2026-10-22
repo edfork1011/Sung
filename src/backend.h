@@ -3,7 +3,6 @@
 #include <QAudioOutput>
 #include <QAudioBufferOutput>
 #include "audiolevels.h"
-#include "outputtap.h"
 #include <QMediaPlayer>
 #include <QProcess>
 #include <QSettings>
@@ -18,9 +17,7 @@
 #include <QAudioDevice>
 #include "collectionview.h"
 #include "playbacknotifier.h"
-#include "musicserver.h"
 #include "offlinestore.h"
-#include "scrobbler.h"
 #include <QElapsedTimer>
 #include <QFileSystemWatcher>
 
@@ -41,7 +38,7 @@ public:
     if(role==Qt::UserRole+2) return CollectionView::folder(rows[i.row()].toMap());
     if(role==Qt::UserRole+1) {
       const auto t=rows[i.row()].toMap();
-      return t.value("source") == "cider" ? "Apple Music" : isServerSource(t.value("source")) ? "Music server" : !t.value("localPath").toString().isEmpty() ? "Local files" : "YouTube Music";
+      return t.value("source")=="qqmusic" ? "QQ Music" : !t.value("localPath").toString().isEmpty() ? "Local files" : "Unavailable source";
     }
     return {};
   }
@@ -81,9 +78,6 @@ signals:
 
 class Backend : public QObject {
   Q_OBJECT
-  Q_PROPERTY(MusicServer *server READ server CONSTANT)
-  Q_PROPERTY(bool serverPlaylistEditable READ serverPlaylistEditable NOTIFY catalogChanged)
-  Q_PROPERTY(QVariantMap serverRequest READ serverRequest NOTIFY catalogChanged)
   Q_PROPERTY(bool importingLocal READ importingLocal NOTIFY localImportChanged)
   Q_PROPERTY(QString localImportStatus READ localImportStatus NOTIFY localImportChanged)
   // Nought to one once the files to import are known, and below nought while
@@ -103,11 +97,14 @@ class Backend : public QObject {
   // The songs played before this one, newest first, for the queue panel to
   // look back over without leaving it.
   Q_PROPERTY(Entries *recentlyPlayed READ recentlyPlayed CONSTANT)
-  Q_PROPERTY(Scrobbler *scrobbler READ scrobbler CONSTANT)
   Q_PROPERTY(QVariantList audioDevices READ audioDevices NOTIFY audioDevicesChanged)
   Q_PROPERTY(QString audioDeviceId READ audioDeviceId WRITE setAudioDeviceId NOTIFY audioDevicesChanged)
   Q_PROPERTY(QString audioDeviceName READ audioDeviceName NOTIFY audioDevicesChanged)
   Q_PROPERTY(QVariantList sections READ sections NOTIFY catalogChanged)
+  Q_PROPERTY(QString homeNotice READ homeNotice NOTIFY catalogChanged)
+  Q_PROPERTY(QString homeError READ homeError NOTIFY errorChanged)
+  Q_PROPERTY(QString currentMotionArt READ currentMotionArt NOTIFY artworkChanged)
+  Q_PROPERTY(QString artworkStatus READ artworkStatus NOTIFY artworkChanged)
   Q_PROPERTY(QString viewKey READ viewKey NOTIFY catalogChanged)
   Q_PROPERTY(QString page READ page NOTIFY catalogChanged)
   Q_PROPERTY(QString libraryId READ libraryId NOTIFY catalogChanged)
@@ -129,9 +126,6 @@ class Backend : public QObject {
   Q_PROPERTY(QVariantList audioSpectrum READ audioSpectrum NOTIFY audioSpectrumChanged)
   Q_PROPERTY(bool spectrumActive READ spectrumActive WRITE setSpectrumActive NOTIFY spectrumActiveChanged)
   Q_PROPERTY(bool playing READ playing NOTIFY playbackChanged)
-  // The current song is sounding in Cider rather than in Sung, so Sung's own
-  // audio work (speed, levelling, the meters) does not reach it.
-  Q_PROPERTY(bool externalPlayback READ externalPlayback NOTIFY playbackChanged)
   Q_PROPERTY(bool resolving READ resolving NOTIFY playbackChanged)
   Q_PROPERTY(bool buffering READ buffering NOTIFY playbackChanged)
   Q_PROPERTY(QString coverPlayId READ coverPlayId NOTIFY playbackChanged)
@@ -183,24 +177,14 @@ class Backend : public QObject {
   Q_PROPERTY(bool onboarded READ onboarded WRITE setOnboarded NOTIFY settingsChanged)
   Q_PROPERTY(QVariantMap albumInfo READ albumInfo NOTIFY catalogChanged)
   Q_PROPERTY(QVariantMap artistInfo READ artistInfo NOTIFY catalogChanged)
-  Q_PROPERTY(QString currentMotionArt READ currentMotionArt NOTIFY onlineArtworkChanged)
-  // Which of Apple's animated covers to fetch, as the helper names them:
-  // "standard", the one every surface shares, or while the Motion layout
-  // shows, the size and shape that fill its window ("1920", "tall1080", ...).
-  // The interface decides, since it knows the window.
-  Q_PROPERTY(QString motionArtQuality READ motionArtQuality WRITE setMotionArtQuality NOTIFY motionArtQualityChanged)
   // The Motion layout's cover size as set: 0 picks one from the window
   // (Auto), or 1080, 1920 or 2160, shown in Settings as 1080p, 2K and 4K.
   Q_PROPERTY(int motionQuality READ motionQuality WRITE setMotionQuality NOTIFY settingsChanged)
-  Q_PROPERTY(QString artworkStatus READ artworkStatus NOTIFY onlineArtworkChanged)
-  Q_PROPERTY(QString artworkPage READ artworkPage NOTIFY onlineArtworkChanged)
   Q_PROPERTY(bool watchMusicFolders READ watchMusicFolders WRITE setWatchMusicFolders NOTIFY settingsChanged)
-  Q_PROPERTY(QString onlineMotionArt READ onlineMotionArt NOTIFY onlineArtworkChanged)
-  Q_PROPERTY(bool onlineArtwork READ onlineArtwork WRITE setOnlineArtwork NOTIFY settingsChanged)
-  Q_PROPERTY(bool albumCovers READ albumCovers WRITE setAlbumCovers NOTIFY settingsChanged)
   Q_PROPERTY(bool animatedArtwork READ animatedArtwork WRITE setAnimatedArtwork NOTIFY settingsChanged)
   Q_PROPERTY(bool motion READ motion WRITE setMotion NOTIFY settingsChanged)
   Q_PROPERTY(bool historyPaused READ historyPaused WRITE setHistoryPaused NOTIFY settingsChanged)
+  Q_PROPERTY(bool closeToTray READ closeToTray WRITE setCloseToTray NOTIFY settingsChanged)
   Q_PROPERTY(bool trackNotifications READ trackNotifications WRITE setTrackNotifications NOTIFY settingsChanged)
   Q_PROPERTY(bool keepCompletedLyrics READ keepCompletedLyrics WRITE setKeepCompletedLyrics NOTIFY settingsChanged)
   // The current lyric line set as a poster in Google Sans Flex. Off unless
@@ -225,7 +209,6 @@ class Backend : public QObject {
   // it; on Hyprland the equivalent is a window rule, which the README gives.
   Q_PROPERTY(bool miniPinned READ miniPinned WRITE setMiniPinned NOTIFY settingsChanged)
   Q_PROPERTY(bool canPinWindows READ canPinWindows CONSTANT)
-  Q_PROPERTY(bool lyricsFallback READ lyricsFallback WRITE setLyricsFallback NOTIFY settingsChanged)
   Q_PROPERTY(QString lyricsSource READ lyricsSource NOTIFY lyricsChanged)
   Q_PROPERTY(QString lyrics READ lyrics NOTIFY lyricsChanged)
   Q_PROPERTY(QVariantList lyricLines READ lyricLines NOTIFY lyricsChanged)
@@ -234,11 +217,17 @@ class Backend : public QObject {
   Q_PROPERTY(int lyricSpan READ lyricSpan NOTIFY lyricIndexChanged)
   Q_PROPERTY(bool lyricsBusy READ lyricsBusy NOTIFY lyricsChanged)
   Q_PROPERTY(QVariantList playlists READ playlists NOTIFY libraryChanged)
+  Q_PROPERTY(QVariantList qqMusicPlaylists READ qqMusicPlaylists NOTIFY catalogChanged)
+  Q_PROPERTY(bool qqMusicLibrary READ qqMusicLibrary NOTIFY catalogChanged)
+  Q_PROPERTY(QString qqMusicLibraryNotice READ qqMusicLibraryNotice NOTIFY catalogChanged)
   Q_PROPERTY(QVariantList pins READ pins NOTIFY libraryChanged)
   Q_PROPERTY(QVariantMap collectionItem READ collectionItem NOTIFY catalogChanged)
   Q_PROPERTY(bool liked READ liked NOTIFY libraryChanged)
-  Q_PROPERTY(QString cookies READ cookies NOTIFY settingsChanged)
-  Q_PROPERTY(QString streamingQuality READ streamingQuality WRITE setStreamingQuality NOTIFY settingsChanged)
+  Q_PROPERTY(bool qqMusicCredential READ qqMusicCredential NOTIFY settingsChanged)
+  Q_PROPERTY(QString qqMusicLoginStatus READ qqMusicLoginStatus NOTIFY qqMusicLoginChanged)
+  Q_PROPERTY(QString qqMusicLoginArt READ qqMusicLoginArt NOTIFY qqMusicLoginChanged)
+  Q_PROPERTY(QString qqMusicLoginError READ qqMusicLoginError NOTIFY qqMusicLoginChanged)
+  Q_PROPERTY(bool qqMusicLoginBusy READ qqMusicLoginBusy NOTIFY qqMusicLoginChanged)
   // How much disk the songs already fetched may keep between them, and what
   // they are using. Zero turns keeping off and empties the store.
   Q_PROPERTY(int keepPlayedMb READ keepPlayedMb WRITE setKeepPlayedMb NOTIFY settingsChanged)
@@ -271,19 +260,7 @@ public:
   QVariantList audioSpectrum() const {return m_audioSpectrum;}
   bool spectrumActive() const {return m_spectrumActive;}
   void setSpectrumActive(bool active);
-  MusicServer *server() {return &m_server;}
-  QString serverArtwork() const {return m_serverArtwork;}
-  bool serverPlaylistEditable() const {return m_page=="server" && m_request.value("mode")=="playlist" && m_request.value("editable").toBool();}
-  QVariantMap serverRequest() const {return m_page=="server"?m_request:QVariantMap{};}
-  Q_INVOKABLE void browseServer(const QString &mode="albums",const QString &query={},const QString &filter="songs");
-  Q_INVOKABLE void addServerPlaylist(const QString &remoteId,const QVariantList &songs);
-  Q_INVOKABLE void renameServerPlaylist(const QVariantMap &playlist,const QString &name);
-  Q_INVOKABLE void deleteServerPlaylist(const QVariantMap &playlist);
-  Q_INVOKABLE void removeServerRows(const QVariantList &indices);
-  Q_INVOKABLE void moveServerRows(const QVariantList &indices,int before);
-  Q_INVOKABLE void rateServerSong(const QVariantMap &song,int rating);
-  Q_INVOKABLE void saveServerQueue();
-  Q_INVOKABLE void restoreServerQueue();
+
   QStringList musicFolders() const { return m_musicFolders; }
   Q_INVOKABLE QString musicFolderLabel(const QString &path) const;
   bool cleanupBusy() const { return m_cleanupBusy; }
@@ -317,12 +294,13 @@ public:
   Entries *queue() { return &m_queue; }
   CollectionView *collection() { return &m_collection; }
   Entries *recentlyPlayed() { return &m_recent; }
-  Scrobbler *scrobbler() { return &m_scrobbler; }
   QVariantList audioDevices() const;
   QString audioDeviceId() const {return m_settings.value("audioDevice").toString();}
   QString audioDeviceName() const;
   void setAudioDeviceId(const QString &id);
   QVariantList sections() const { return m_sections; }
+  QString homeNotice() const { return m_homeNotice; }
+  QString homeError() const { return m_page=="home" && m_retryTarget=="catalog" ? m_error : QString(); }
   QString page() const { return m_page; }
   QString viewKey() const { return m_viewKey; }
   QString libraryId() const { return m_libraryId; }
@@ -344,15 +322,12 @@ public:
   QVariantMap current() const { return m_queue.get(m_index); }
   int currentIndex() const { return m_index; }
   bool playing() const {
-    if (m_remote) return m_server.cider()->playing();
     return m_media().playbackState() == QMediaPlayer::PlayingState;
   }
-  bool externalPlayback() const { return m_remote; }
   QString coverPlayId() const { return m_coverPlayId; }
   bool resolving() const { return m_resolving; }
-  bool buffering() const { return m_wantPlay && (m_resolving || (m_remote && m_server.cider()->starting()) || m_media().mediaStatus()==QMediaPlayer::LoadingMedia || m_media().mediaStatus()==QMediaPlayer::StalledMedia || m_media().mediaStatus()==QMediaPlayer::BufferingMedia); }
+  bool buffering() const { return m_wantPlay && (m_resolving || m_media().mediaStatus()==QMediaPlayer::LoadingMedia || m_media().mediaStatus()==QMediaPlayer::StalledMedia || m_media().mediaStatus()==QMediaPlayer::BufferingMedia); }
   qint64 position() const {
-    if (m_remote && m_server.cider()->active()) return m_server.cider()->position();
     return m_media().source().isEmpty() ? m_savedPosition : m_media().position();
   }
   qint64 duration() const {
@@ -361,7 +336,6 @@ public:
     // not offer that source's length. A source played without a queue
     // (--smoke-local) still reports its own.
     if (m_index < 0 && m_media().playbackState() == QMediaPlayer::StoppedState) return 0;
-    if (m_remote && m_server.cider()->duration() > 0) return m_server.cider()->duration();
     return m_media().duration() > 0
                ? m_media().duration()
                : current().value("seconds").toLongLong() * 1000;
@@ -422,7 +396,7 @@ public:
   bool sidebarNavigation() const {return m_settings.value("sidebarNavigation",false).toBool();}
   void setCompactDensity(bool value);
   void setSidebarNavigation(bool value);
-  QString startPage() const {return m_settings.value("startPage","home").toString();}
+  QString startPage() const {const auto page=m_settings.value("startPage","home").toString();return QStringList{"home","files","favorites"}.contains(page)?page:QStringLiteral("home");}
   void setStartPage(const QString &value);
   QStringList homeOrder() const {return m_settings.value("homeOrder").toStringList();}
   QStringList hiddenHomeSections() const {return m_settings.value("hiddenHomeSections").toStringList();}
@@ -484,29 +458,13 @@ public:
   QVariantMap artistInfo() const;
   QString currentMotionArt() const;
   QString artworkStatus() const;
-  QString artworkPage() const { return m_artworkPage; }
-  Q_INVOKABLE void retryArtwork();
   Q_INVOKABLE void rejectArtwork();
   Q_INVOKABLE void resetArtworkChoice();
   Q_INVOKABLE void chooseArtwork(const QUrl &url, const QString &songId);
   bool watchMusicFolders() const { return m_settings.value("watchMusicFolders",true).toBool(); }
   void setWatchMusicFolders(bool value);
-  QString onlineMotionArt() const { return m_onlineMotionArt; }
-  QString motionArtQuality() const { return m_motionArtQuality; }
-  void setMotionArtQuality(const QString &quality);
   int motionQuality() const { const int size=m_settings.value("motionQuality",0).toInt(); return size==1080 || size==1920 || size==2160 ? size : 0; }
   void setMotionQuality(int size);
-  bool onlineArtwork() const { return m_settings.value("onlineArtwork",true).toBool(); }
-  void setOnlineArtwork(bool value) { if(onlineArtwork()==value)return;m_settings.setValue("onlineArtwork",value);emit settingsChanged(); }
-  // Whether a song that only has a video frame shows the album cover Apple
-  // Music has for it instead. Independent of the animated cover switches: the
-  // lookup runs for either, and each result is applied by its own switch.
-  bool albumCovers() const { return m_settings.value("albumCovers",true).toBool(); }
-  void setAlbumCovers(bool value);
-  // The album cover remembered for one of YouTube's video frames, or an empty
-  // URL when the frame is not one, nothing has been found for it, or the
-  // setting is off. The art loader asks this for every frame it draws.
-  Q_INVOKABLE QUrl albumCoverFor(const QUrl &frame) const;
   // A track's cover as something outside the window should show it, at a
   // size that suits a media widget.
   QString displayArt(const QVariantMap &track) const;
@@ -517,6 +475,8 @@ public:
   Q_INVOKABLE void setUiActive(bool active);
   bool historyPaused() const {return m_historyPaused;}
   void setHistoryPaused(bool paused);
+  bool closeToTray() const {return m_settings.value("closeToTray",true).toBool();}
+  void setCloseToTray(bool value) {if(closeToTray()==value)return;m_settings.setValue("closeToTray",value);emit settingsChanged();}
   bool trackNotifications() const {return m_settings.value("trackNotifications",false).toBool();}
   void setTrackNotifications(bool enabled);
   bool keepCompletedLyrics() const {return m_settings.value("keepCompletedLyrics",true).toBool();}
@@ -527,13 +487,15 @@ public:
   void setVolumeStep(int percent);
   QString theme() const { return m_settings.value("theme", "system").toString(); }
   void setTheme(const QString &);
-  QString cookies() const { return m_settings.value("cookies").toString(); }
-  // How much of the network a YouTube song is allowed to cost. Standard takes
-  // the best stream YouTube offers, which is Opus at about 130 kbps; data
-  // saver caps it, which lands on the Opus rung at about 67 kbps. The whole
-  // song is buffered before it plays, so this is the download either way.
-  QString streamingQuality() const { const auto v=m_settings.value("streamingQuality","standard").toString();return v=="saver"?v:"standard"; }
-  void setStreamingQuality(const QString &value) { if(streamingQuality()==value || (value!="saver" && value!="standard"))return;m_settings.setValue("streamingQuality",value);emit settingsChanged(); }
+  bool qqMusicCredential() const;
+  Q_INVOKABLE void importQQMusicCredential(const QUrl &url);
+  Q_INVOKABLE void clearQQMusicCredential();
+  QString qqMusicLoginStatus() const { return m_qqMusicLoginStatus; }
+  QString qqMusicLoginArt() const { return m_qqMusicLoginArt; }
+  QString qqMusicLoginError() const { return m_qqMusicLoginError; }
+  bool qqMusicLoginBusy() const { return m_qqMusicLoginStatus=="loading" || m_qqMusicLoginStatus=="waiting" || m_qqMusicLoginStatus=="scanned"; }
+  Q_INVOKABLE void startQQMusicLogin(const QString &type="qq");
+  Q_INVOKABLE void cancelQQMusicLogin();
   int keepPlayedMb() const {return qBound(0,m_settings.value("keepPlayedMb",1024).toInt(),65536);}
   void setKeepPlayedMb(int megabytes);
   QString keptSongsSize() const;
@@ -556,8 +518,6 @@ public:
   static bool canPinWindows();
   bool prepareNext() const {return m_settings.value("prepareNext",true).toBool();}
   void setPrepareNext(bool enabled);
-  bool lyricsFallback() const {return m_settings.value("lyricsFallback",true).toBool();}
-  void setLyricsFallback(bool enabled);
   QString lyricsSource() const {return m_lyricsSource;}
   Q_INVOKABLE void importLyrics(const QUrl &url, const QString &songId);
   Q_INVOKABLE void resetLyrics();
@@ -570,6 +530,9 @@ public:
   QPair<qint64,qint64> lyricSpanAt(int index) const;
   bool lyricsBusy() const { return m_lyricsBusy; }
   QVariantList playlists() const;
+  QVariantList qqMusicPlaylists() const { return qqMusicLibrary() && m_libraryId=="playlists" ? m_results.rows : QVariantList(); }
+  bool qqMusicLibrary() const { return m_page=="library" && m_request.value("op")=="account"; }
+  QString qqMusicLibraryNotice() const { return qqMusicLibrary() ? m_request.value("notice").toString() : QString(); }
   QVariantList pins() const;
   QVariantMap collectionItem() const;
   Q_INVOKABLE bool isPinned(const QVariantMap &item) const;
@@ -636,8 +599,6 @@ public:
   }
   Q_INVOKABLE void copyLink(const QVariantMap &item);
   Q_INVOKABLE void openLink(const QString &url);
-  Q_INVOKABLE void setCookieFile(const QUrl &url);
-  Q_INVOKABLE void clearCookies();
   Q_INVOKABLE void clearHistory();
   Q_INVOKABLE void clearCache();
   Q_INVOKABLE QString formatTime(qint64 ms) const;
@@ -651,9 +612,6 @@ public:
   QString trackToken() const { return QString::number(m_trackToken); }
   QMediaPlayer *media() { return &m_media(); }
 signals:
-  void onlineArtworkChanged();
-  void motionArtQualityChanged();
-  void videoCoversChanged();
   void viewAboutToChange();
   void localImportChanged();
   void listPaneChanged();
@@ -670,6 +628,7 @@ signals:
   void positionChanged();
   void lyricIndexChanged();
   void settingsChanged();
+  void qqMusicLoginChanged();
   void libraryChanged();
   void lyricsChanged();
   void audioDevicesChanged();
@@ -677,6 +636,7 @@ signals:
   void sessionsChanged();
   void presentationChanged();
   void qualityChanged();
+  void artworkChanged();
   void artworkFitChanged();
   void artworkCacheCleared();
   void seeked(qint64 position);
@@ -684,40 +644,13 @@ signals:
   void raiseRequested();
 
 private:
-  void updateOnlineArtwork();
-  void fetchOnlineArtwork();
-  bool motionLookupWanted() const;
-  bool coverLookupWanted() const;
-  void rememberVideoCover(const QString &videoId,const QString &cover);
-  void forgetVideoCover(const QString &videoId);
-  QVariantMap m_videoCovers;
   QString artworkChoice() const;
   void saveArtworkChoice(const QString &value);
-  QString m_artworkPage, m_artworkStatus;
-  bool m_artworkForce=false;
-  QTimer m_onlineArtworkTimer;
-  QString m_onlineMotionArt, m_onlineArtworkId;
-  quint64 m_onlineArtworkToken=0, m_onlineArtworkGeneration=0;
-  bool m_onlineArtworkAttempted=false;
-  int m_onlineArtworkRetries=0;
-  QString m_motionArtQuality=QStringLiteral("standard");
-  void refetchMotionArt();
   friend class BackendTest;
   friend class CrossfadeTest;
-  friend class SubsonicTest;
-  void serverBrowseRequest(QVariantMap request,bool push=true,bool append=false);
-  void setupServer();
-  MusicServer m_server;
   // Songs already fetched, kept so a replay and a lost connection cost
   // nothing. See offlinestore.h for why the directory is its own index.
   OfflineStore m_offline;
-  QString m_serverArtwork;
-  std::shared_ptr<QTemporaryDir> m_serverArtDirectory;
-  QTimer m_serverListenTimer;
-  QElapsedTimer m_serverElapsed;
-  quint64 m_serverListenToken=0;
-  qint64 m_serverListened=0,m_serverStarted=0;
-  bool m_serverSubmitted=false;
 
   using Callback = std::function<void(const QVariantMap &)>;
   void invalidateUndo(const QString &type);
@@ -737,7 +670,8 @@ private:
   bool m_portDirty=false;
   int m_decodeRate=0,m_decodeChannels=0;
   QVariantList m_sessions;
-  void request(const QString &channel, QVariantMap args, Callback done, std::shared_ptr<QTemporaryDir> lifetime = {});
+  void request(const QString &channel, QVariantMap args, Callback done, std::shared_ptr<QTemporaryDir> lifetime = {}, Callback progress = {});
+  bool storeQQMusicCredential(const QByteArray &bytes, QString &error);
   void updatePreparation();
   void importNextLocalBatch();
   void mergeLocalTrack(QVariantMap track);
@@ -771,6 +705,13 @@ private:
   void restore(const QVariantMap &);
   static QVariantList playable(const QVariantList &);
   QSettings m_settings;
+  QString m_qqMusicLoginStatus="idle",m_qqMusicLoginArt,m_qqMusicLoginError;
+  quint64 m_qqMusicLoginToken=0;
+  void resetQQMusicAccount();
+  void syncQQMusicLikes();
+  QSet<QString> m_qqMusicLikes, m_qqMusicLikePending;
+  quint64 m_qqMusicAccountGeneration=0, m_qqMusicLikeRevision=0;
+  std::shared_ptr<QTemporaryDir> m_qqMusicLoginDirectory;
   PlaybackNotifier m_notifier;
   bool m_historyPaused = false;
   quint64 m_skipHistoryToken = 0, m_announcedToken = 0;
@@ -783,6 +724,7 @@ private:
   // Keyed by the source colour and by everything else that decides the scheme.
   mutable QHash<QPair<QRgb,QString>,QVariantMap> m_schemes;
   QVariantList m_sections, m_favorites, m_history, m_playlists, m_back, m_pins;
+  QString m_homeNotice;
   Entries m_recent;
   void refreshRecentlyPlayed();
   // One row per play, oldest first. A private session records nothing.
@@ -796,13 +738,6 @@ private:
   void recordPlay(const QVariantMap &track);
   // Listening history sent onward. A song is reported as it starts, and the
   // listen itself once it has played far enough to count.
-  Scrobbler m_scrobbler;
-  quint64 m_scrobbleToken = 0;
-  qint64 m_scrobbleStartedAt = 0;
-  qint64 m_scrobbleThreshold = -1;
-  bool m_scrobbleSent = false;
-  void beginScrobble();
-  void considerScrobble();
   // Playlist id to a list of earlier versions, newest first.
   QVariantMap m_playlistVersions;
   void snapshotPlaylist(const QString &id);
@@ -835,7 +770,7 @@ private:
   quint64 m_coverPlayToken = 0;
   void cancelCoverPlay();
   bool m_busy = false, m_more = false, m_resolving = false,
-       m_lyricsBusy = false, m_retry = false, m_wantPlay = false;
+       m_lyricsBusy = false, m_wantPlay = false;
   int m_index = -1;
   void resetAudioLevels();
   AudioLevels m_levelAnalyzer;
@@ -857,9 +792,6 @@ private:
   QAudioBufferOutput m_visualAudio;
   QMediaPlayer m_deckA, m_deckB;
   bool m_usingB = false;
-  // The current song plays in Cider; see Cider.
-  bool m_remote = false;
-  OutputTap m_outputTap;
   QMediaPlayer &m_media() { return m_usingB ? m_deckB : m_deckA; }
   const QMediaPlayer &m_media() const { return m_usingB ? m_deckB : m_deckA; }
   QMediaPlayer &spareDeck() { return m_usingB ? m_deckA : m_deckB; }
@@ -888,11 +820,7 @@ private:
   // What happens when the song being heard reaches its end, wherever it
   // was playing.
   void trackEnded();
-  // Hands playback back from Cider to Sung's own decks.
-  void leaveRemote();
-  void wireCider();
   void meter(const QAudioBuffer &buffer);
-  void updateOutputTap();
   // The queue position the spare deck is holding, or -1 when it holds nothing.
   int m_handoffIndex = -1;
   bool m_handoffPrepared = false;
@@ -931,7 +859,6 @@ private:
   static bool longRecording(const QVariantMap &track);
   static double trackGainDb(const QVariantMap &track);
   QHash<QString, QProcess *> m_processes;
-  QHash<QString, QVariantMap> m_streams;
   qint64 m_restorePosition = 0, m_savedPosition = 0;
   bool m_uiActive = true;
   int m_notifiedLyricIndex = -1;

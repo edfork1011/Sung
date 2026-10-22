@@ -7,6 +7,9 @@
 #include "desktoptheme.h"
 #include <QSaveFile>
 #include <QClipboard>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QImage>
 #include <QGuiApplication>
 #include <QSignalSpy>
 #include <QTemporaryDir>
@@ -21,7 +24,7 @@ class BackendTest : public QObject {
   QTemporaryDir storage;
   QVariantMap track(const QString &id) {
     return {{"id", id},
-            {"videoId", id},
+            {"source", "qqmusic"}, {"remoteId",id}, {"qqMusicSong",true},
             {"title", "Track " + id},
             {"kind", "song"}};
   }
@@ -32,6 +35,154 @@ private slots:
     qputenv("XDG_CACHE_HOME", storage.path().toUtf8());
     QCoreApplication::setApplicationName("sung-test");
     QCoreApplication::setOrganizationName("SungTests");
+  }
+  void qqMusicIntegration() {
+    const auto oldHelper=qgetenv("SUNG_HELPER"),oldPython=qgetenv("SUNG_PYTHON"),oldBuffer=qgetenv("SUNG_BUFFER_FIXTURE"),oldState=qgetenv("SUNG_QQ_ACCOUNT_STATE");
+    QTemporaryDir account;
+    qputenv("SUNG_QQ_ACCOUNT_STATE",account.filePath("state.json").toUtf8());
+    qputenv("SUNG_HELPER",qgetenv("SUNG_FIXTURE_HELPER"));qputenv("SUNG_PYTHON","python3");qputenv("SUNG_BUFFER_FIXTURE","1");
+    const auto restore=qScopeGuard([&]{qputenv("SUNG_HELPER",oldHelper);qputenv("SUNG_PYTHON",oldPython);qputenv("SUNG_BUFFER_FIXTURE",oldBuffer);qputenv("SUNG_QQ_ACCOUNT_STATE",oldState);});
+    Backend b;b.clearQueue();b.setPrepareNext(false);b.setAutoplay(false);b.library("files");
+    const auto credential=account.filePath("credential.json");
+    {QFile file(credential);QVERIFY(file.open(QIODevice::WriteOnly));file.write("{\"musicid\":111,\"musickey\":\"fixture-key\",\"encryptUin\":\"fixture-identity\"}");}
+    b.importQQMusicCredential(QUrl::fromLocalFile(credential));
+    b.search("QQ search","songs");QTRY_VERIFY_WITH_TIMEOUT(!b.busy(),5000);
+    QCOMPARE(b.results()->count(),30);QCOMPARE(b.m_request.value("source").toString(),"qqmusic");
+    const auto song=b.results()->get(0);QVERIFY(song.value("videoId").toString().isEmpty());
+    QCOMPARE(Backend::playable({song,track("sameid00000")}).size(),2);
+    auto unavailable=song;unavailable["available"]=false;QVERIFY(Backend::playable({unavailable}).isEmpty());
+    auto invalid=song;invalid["remoteId"]="../invalid";QVERIFY(Backend::playable({invalid}).isEmpty());
+    b.enqueue(song);QCOMPARE(b.queue()->count(),1);QCOMPARE(b.queue()->data(b.queue()->index(0),Qt::UserRole+1).toString(),"QQ Music");
+    RowSelection selection;selection.setModel(b.results());selection.selectAll();QCOMPARE(selection.count(),30);
+    b.toggleLike(song);QTRY_VERIFY_WITH_TIMEOUT(b.isLiked(song.value("id").toString()),5000);
+    const auto playlist=b.createPlaylist("QQ mixed queue");b.addToPlaylist(playlist,song);b.addToPlaylist(playlist,track("sameid00000"));
+    b.openPlaylist(playlist);QCOMPARE(b.results()->count(),2);
+    const auto smart=b.saveSmartPlaylist({},"QQ only",{{"source","qqmusic"}});b.openPlaylist(smart);QCOMPARE(b.results()->count(),2);
+    b.copyLink(song);QCOMPARE(QGuiApplication::clipboard()->text(),"https://y.qq.com/n/ryqq/songDetail/"+song.value("remoteId").toString());
+    b.open({{"kind","album"},{"browseId","QQALBUM"},{"source","qqmusic"},{"title","QQ album"}});QTRY_VERIFY_WITH_TIMEOUT(!b.busy(),5000);
+    const auto collection=b.collectionItem();QCOMPARE(collection.value("source").toString(),"qqmusic");QVERIFY(collection.value("id").toString().startsWith("qq_"));
+    b.togglePin(collection);QVERIFY(b.isPinned(collection));b.open(b.pins().first().toMap());QTRY_VERIFY_WITH_TIMEOUT(!b.busy(),5000);QCOMPARE(b.m_request.value("source").toString(),"qqmusic");b.togglePin(collection);
+    b.playItem(song);QTRY_VERIFY_WITH_TIMEOUT(!b.resolving(),5000);QVERIFY2(b.error().isEmpty(),qPrintable(b.error()));
+    QVERIFY(b.m_media().source().isLocalFile());QVERIFY(b.m_offline.has(OfflineStore::keyFor(song,"mp3_128")));
+    QCOMPARE(OfflineStore::keyFor(song,"standard"),OfflineStore::keyFor(song,"mp3_128"));
+    b.fetchLyrics();QTRY_VERIFY_WITH_TIMEOUT(!b.lyricsBusy(),5000);QCOMPARE(b.lyrics(),"Test lyrics");
+    b.radio(song);QTRY_COMPARE_WITH_TIMEOUT(b.queue()->count(),5,5000);
+    b.clearQueue();b.deletePlaylist(playlist);b.deletePlaylist(smart);b.toggleLike(song);QTRY_VERIFY_WITH_TIMEOUT(!b.isLiked(song.value("id").toString()),5000);b.library("files");b.clearQQMusicCredential();
+  }
+  void qqMusicAccountLibrary() {
+    QTemporaryDir directory;
+    const auto oldHelper=qgetenv("SUNG_HELPER"),oldPython=qgetenv("SUNG_PYTHON"),oldState=qgetenv("SUNG_QQ_ACCOUNT_STATE"),oldMode=qgetenv("SUNG_QQ_ACCOUNT_FIXTURE"),oldLog=qgetenv("SUNG_REQUEST_LOG");
+    qputenv("SUNG_HELPER",qgetenv("SUNG_FIXTURE_HELPER"));qputenv("SUNG_PYTHON","python3");qputenv("SUNG_QQ_ACCOUNT_STATE",directory.filePath("state.json").toUtf8());qputenv("SUNG_REQUEST_LOG",directory.filePath("requests.jsonl").toUtf8());qunsetenv("SUNG_QQ_ACCOUNT_FIXTURE");
+    const auto restore=qScopeGuard([&]{qputenv("SUNG_HELPER",oldHelper);qputenv("SUNG_PYTHON",oldPython);qputenv("SUNG_QQ_ACCOUNT_STATE",oldState);qputenv("SUNG_QQ_ACCOUNT_FIXTURE",oldMode);qputenv("SUNG_REQUEST_LOG",oldLog);});
+    Backend b;b.library("files");b.clearQQMusicCredential();
+    const auto local=b.createPlaylist("Local playlist stays local");
+    b.library("favorites");QVERIFY(b.qqMusicLibrary());QVERIFY(!b.busy());QCOMPARE(b.results()->count(),0);
+    b.library("playlists");QVERIFY(b.qqMusicPlaylists().isEmpty());QVERIFY(!b.busy());
+    const auto credential=directory.filePath("credential.json");
+    const auto signIn=[&](int identity){QFile file(credential);if(!file.open(QIODevice::WriteOnly|QIODevice::Truncate))return false;file.write(QJsonDocument(QJsonObject{{"musicid",identity},{"musickey","fixture-key"},{"encryptUin","fixture-identity"}}).toJson());file.close();b.importQQMusicCredential(QUrl::fromLocalFile(credential));return true;};
+    QVERIFY(signIn(111));QTRY_VERIFY_WITH_TIMEOUT(!b.busy(),5000);
+    QCOMPARE(b.qqMusicPlaylists().size(),2);QCOMPARE(b.libraryId(),"playlists");
+    const auto playlist=b.qqMusicPlaylists().first().toMap();QCOMPARE(playlist.value("source").toString(),"qqmusic");QVERIFY(playlist.value("owned").toBool());
+    QVERIFY(!b.qqMusicPlaylists()[1].toMap().value("owned").toBool());
+    b.open(playlist);QTRY_VERIFY_WITH_TIMEOUT(!b.busy(),5000);QCOMPARE(b.page(),"playlist");QCOMPARE(b.m_request.value("id").toString(),"12345");
+    b.back();QTRY_VERIFY_WITH_TIMEOUT(!b.busy(),5000);QVERIFY(b.qqMusicLibrary());QCOMPARE(b.qqMusicPlaylists().size(),2);
+    b.library("favorites");QTRY_VERIFY_WITH_TIMEOUT(!b.busy(),5000);QCOMPARE(b.results()->count(),2);
+    const auto liked=b.results()->get(0);const auto likedId=liked.value("id").toString();QVERIFY(b.isLiked(likedId));
+    b.toggleLike(liked);QVERIFY(b.isLiked(likedId));QTRY_VERIFY_WITH_TIMEOUT(!b.isLiked(likedId),5000);QCOMPARE(b.results()->count(),1);
+    qputenv("SUNG_QQ_ACCOUNT_FIXTURE","like-error");b.toggleLike(liked);QTRY_VERIFY_WITH_TIMEOUT(!b.error().isEmpty(),5000);QVERIFY(!b.isLiked(likedId));QCOMPARE(b.results()->count(),1);b.dismissError();
+    qputenv("SUNG_QQ_ACCOUNT_FIXTURE","paged");b.library("favorites");QTRY_VERIFY_WITH_TIMEOUT(!b.busy(),5000);QCOMPARE(b.results()->count(),100);QVERIFY(b.canMore());
+    b.more();QTRY_VERIFY_WITH_TIMEOUT(!b.busy(),5000);QCOMPARE(b.results()->count(),150);QVERIFY(!b.canMore());
+    qputenv("SUNG_QQ_ACCOUNT_FIXTURE","partial");b.library("playlists");QTRY_VERIFY_WITH_TIMEOUT(!b.busy(),5000);QVERIFY(!b.qqMusicLibraryNotice().isEmpty());QCOMPARE(b.qqMusicPlaylists().size(),2);
+    qputenv("SUNG_QQ_ACCOUNT_FIXTURE","error");b.library("favorites");QTRY_VERIFY_WITH_TIMEOUT(!b.busy(),5000);QVERIFY(b.canRetry());QVERIFY(b.results()->rows.isEmpty());
+    qunsetenv("SUNG_QQ_ACCOUNT_FIXTURE");b.retry();QTRY_VERIFY_WITH_TIMEOUT(!b.busy(),5000);QCOMPARE(b.results()->count(),1);
+    qputenv("SUNG_QQ_ACCOUNT_FIXTURE","slow");b.library("playlists");QVERIFY(b.busy());b.clearQQMusicCredential();QVERIFY(!b.busy());QVERIFY(b.qqMusicPlaylists().isEmpty());QVERIFY(!b.isLiked(likedId));
+    QTest::qWait(1100);QVERIFY(b.qqMusicPlaylists().isEmpty());
+    qunsetenv("SUNG_QQ_ACCOUNT_FIXTURE");QVERIFY(signIn(222));QTRY_VERIFY_WITH_TIMEOUT(!b.busy(),5000);
+    b.library("favorites");QTRY_VERIFY_WITH_TIMEOUT(!b.busy(),5000);QCOMPARE(b.results()->count(),1);QCOMPARE(b.results()->get(0).value("remoteId").toString(),"qqmid000000007");QVERIFY(!b.isLiked(likedId));
+    QFile log(directory.filePath("requests.jsonl"));QVERIFY(log.open(QIODevice::ReadOnly));const auto bytes=log.readAll();QVERIFY(!bytes.contains("fixture-key"));QVERIFY(bytes.contains("credentialFile"));QVERIFY(bytes.contains("qqMusicId"));
+    b.library("local-playlists");QVERIFY(!b.qqMusicLibrary());QVERIFY(!b.playlists().isEmpty());b.deletePlaylist(local);b.clearQQMusicCredential();
+  }
+  void qqMusicHomeRecommendations() {
+    const auto oldHelper=qgetenv("SUNG_HELPER"),oldPython=qgetenv("SUNG_PYTHON"),oldMode=qgetenv("SUNG_QQ_HOME_FIXTURE");
+    qputenv("SUNG_HELPER",qgetenv("SUNG_FIXTURE_HELPER"));qputenv("SUNG_PYTHON","python3");qputenv("SUNG_QQ_HOME_FIXTURE","recommendations");
+    const auto restore=qScopeGuard([&]{qputenv("SUNG_HELPER",oldHelper);qputenv("SUNG_PYTHON",oldPython);qputenv("SUNG_QQ_HOME_FIXTURE",oldMode);});
+    Backend b;b.library("files");b.m_pins.clear();b.resetHomeLayout();b.setStartPage("home");
+    b.togglePin({{"kind","album"},{"browseId","OLDALBUM"},{"title","Unavailable pin"}});
+    b.openStartPage();QTRY_VERIFY_WITH_TIMEOUT(!b.busy(),5000);
+    QCOMPARE(b.page(),"home");QCOMPARE(b.title(),"QQ Music");
+    QCOMPARE(b.m_request.value("source").toString(),"qqmusic");QCOMPARE(b.sections().size(),4);
+    QCOMPARE(b.homeSections().size(),4);QVERIFY(b.homeNotice().isEmpty());
+    for(const auto &section:b.homeSections())for(const auto &item:section.toMap().value("items").toList()){
+      QCOMPARE(item.toMap().value("source").toString(),"qqmusic");QVERIFY(item.toMap().value("videoId").toString().isEmpty());
+    }
+    const auto first=b.sections().first().toMap().value("items").toList().first().toMap();
+    QVERIFY(Backend::playable({first}).size()==1);
+    for(int index:{1,3}){
+      const auto card=b.sections()[index].toMap().value("items").toList().first().toMap();
+      b.open(card);QTRY_VERIFY_WITH_TIMEOUT(!b.busy(),5000);
+      QCOMPARE(b.m_request.value("source").toString(),"qqmusic");QCOMPARE(b.results()->count(),2);
+      QCOMPARE(b.m_request.value("id"),card.value("browseId"));
+      b.back();QCOMPARE(b.page(),"home");QCOMPARE(b.sections().size(),4);
+    }
+    qputenv("SUNG_QQ_HOME_FIXTURE","partial");b.home();QTRY_VERIFY_WITH_TIMEOUT(!b.busy(),5000);
+    QVERIFY(!b.homeNotice().isEmpty());QCOMPARE(b.sections().size(),4);QVERIFY(b.error().isEmpty());
+    b.open(b.sections()[1].toMap().value("items").toList().first().toMap());QTRY_VERIFY_WITH_TIMEOUT(!b.busy(),5000);
+    QVERIFY(b.homeNotice().isEmpty());b.back();QVERIFY(!b.homeNotice().isEmpty());
+    // Account changes refresh recommendations with the newly stored credential.
+    QTemporaryDir directory;const auto credential=directory.filePath("credential.json");
+    {QFile file(credential);QVERIFY(file.open(QIODevice::WriteOnly));file.write("{\"musicid\":123,\"musickey\":\"fixture-key\"}");}
+    qputenv("SUNG_QQ_HOME_FIXTURE","recommendations");b.importQQMusicCredential(QUrl::fromLocalFile(credential));
+    QVERIFY(b.busy());QTRY_VERIFY_WITH_TIMEOUT(!b.busy(),5000);QVERIFY(b.homeNotice().isEmpty());
+    b.clearQQMusicCredential();QVERIFY(b.busy());QTRY_VERIFY_WITH_TIMEOUT(!b.busy(),5000);
+    // An empty initial load can be retried through the same QQ Music route.
+    b.library("files");qputenv("SUNG_QQ_HOME_FIXTURE","error");b.home();QTRY_VERIFY_WITH_TIMEOUT(!b.busy(),5000);
+    QVERIFY(b.sections().isEmpty());QVERIFY(b.canRetry());QCOMPARE(b.homeError(),b.error());QVERIFY(!b.homeError().isEmpty());QCOMPARE(b.m_request.value("source").toString(),"qqmusic");
+    qputenv("SUNG_QQ_HOME_FIXTURE","recommendations");b.retry();QTRY_VERIFY_WITH_TIMEOUT(!b.busy(),5000);
+    QCOMPARE(b.sections().size(),4);QVERIFY(b.error().isEmpty());QVERIFY(b.homeError().isEmpty());
+    b.m_pins.clear();b.resetHomeLayout();b.library("files");
+  }
+  void qqMusicCredentialsStayOutsideExports() {
+    Backend b;b.library("files");b.clearQQMusicCredential();QVERIFY(!b.qqMusicCredential());
+    QTemporaryDir directory;const auto path=directory.filePath("credential.json");
+    {QFile file(path);QVERIFY(file.open(QIODevice::WriteOnly));file.write("{\"musicid\":123456,\"musickey\":\"secret-fixture-key\"}");}
+    b.importQQMusicCredential(QUrl::fromLocalFile(path));QVERIFY(b.qqMusicCredential());
+    const auto stored=QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)+"/qqmusic-credential.json";
+    const auto permissions=QFile::permissions(stored);QVERIFY(!(permissions&QFileDevice::ReadGroup));QVERIFY(!(permissions&QFileDevice::ReadOther));
+    const auto exported=directory.filePath("library.json");b.exportLibrary(QUrl::fromLocalFile(exported));QFile output(exported);QVERIFY(output.open(QIODevice::ReadOnly));QVERIFY(!output.readAll().contains("secret-fixture-key"));
+    {QFile file(path);QVERIFY(file.open(QIODevice::WriteOnly|QIODevice::Truncate));file.write("{\"musicid\":0,\"musickey\":\"rejected-key\"}");}
+    b.importQQMusicCredential(QUrl::fromLocalFile(path));QVERIFY(!b.error().isEmpty());QVERIFY(!b.error().contains("rejected-key"));
+    QFile saved(stored);QVERIFY(saved.open(QIODevice::ReadOnly));QVERIFY(saved.readAll().contains("secret-fixture-key"));saved.close();
+    b.clearQQMusicCredential();QVERIFY(!b.qqMusicCredential());
+  }
+  void qqMusicQRLoginLifecycle() {
+    const auto oldHelper=qgetenv("SUNG_HELPER"),oldPython=qgetenv("SUNG_PYTHON"),oldMode=qgetenv("SUNG_QQ_LOGIN_FIXTURE");
+    qputenv("SUNG_HELPER",qgetenv("SUNG_FIXTURE_HELPER"));qputenv("SUNG_PYTHON","python3");
+    const auto restore=qScopeGuard([&]{qputenv("SUNG_HELPER",oldHelper);qputenv("SUNG_PYTHON",oldPython);qputenv("SUNG_QQ_LOGIN_FIXTURE",oldMode);});
+    Backend b;b.library("files");b.clearQQMusicCredential();
+    qputenv("SUNG_QQ_LOGIN_FIXTURE","waiting");b.startQQMusicLogin("qq");
+    QCOMPARE(b.qqMusicLoginStatus(),"loading");QVERIFY(b.qqMusicLoginBusy());
+    QTRY_COMPARE_WITH_TIMEOUT(b.qqMusicLoginStatus(),QString("waiting"),5000);
+    const auto oldImage=QUrl(b.qqMusicLoginArt()).toLocalFile();QVERIFY(QFileInfo::exists(oldImage));
+    QVERIFY(!QImage(oldImage).isNull());
+    b.cancelQQMusicLogin();QCOMPARE(b.qqMusicLoginStatus(),"idle");QVERIFY(!b.qqMusicLoginBusy());QVERIFY(b.qqMusicLoginArt().isEmpty());
+    QTRY_VERIFY_WITH_TIMEOUT(!QFileInfo::exists(oldImage),3000);QVERIFY(!b.qqMusicCredential());
+    // A replacement session cannot receive the old worker's later result.
+    qputenv("SUNG_QQ_LOGIN_FIXTURE","success");b.startQQMusicLogin("wx");
+    QTRY_COMPARE_WITH_TIMEOUT(b.qqMusicLoginStatus(),QString("done"),5000);
+    QVERIFY(b.qqMusicCredential());QVERIFY(!b.qqMusicLoginBusy());QVERIFY(b.qqMusicLoginArt().isEmpty());QVERIFY(b.qqMusicLoginError().isEmpty());
+    const auto path=QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)+"/qqmusic-credential.json";
+    QFile saved(path);QVERIFY(saved.open(QIODevice::ReadOnly));const auto original=saved.readAll();saved.close();
+    QCOMPARE(QJsonDocument::fromJson(original).object().value("musicid").toInt(),222);
+    QVERIFY(!(QFile::permissions(path)&QFileDevice::ReadOther));
+    for(const auto &mode:{"expired","refused","invalid-credential","invalid-image"}) {
+      qputenv("SUNG_QQ_LOGIN_FIXTURE",mode);b.startQQMusicLogin("qq");
+      QTRY_VERIFY_WITH_TIMEOUT(!b.qqMusicLoginBusy(),5000);
+      QVERIFY(!b.qqMusicLoginError().isEmpty());QVERIFY(b.qqMusicLoginArt().isEmpty());
+      QCOMPARE(b.qqMusicLoginStatus(),mode==QString("expired")?"expired":mode==QString("refused")?"refused":"error");
+      QVERIFY(saved.open(QIODevice::ReadOnly));QCOMPARE(saved.readAll(),original);saved.close();
+    }
+    b.startQQMusicLogin("unknown");QVERIFY(!b.qqMusicLoginBusy());
+    b.clearQQMusicCredential();
   }
   void sleepFadeRestoresUserVolume() {
     Backend b;b.setSleepFade(true);b.setVolume(.6);b.setSleep(15);
@@ -83,13 +234,13 @@ private slots:
     b.showHomeSection("unknown",false);QCOMPARE(b.hiddenHomeSections(),QStringList{"One"});
     {Backend restored;restored.setWatchMusicFolders(false);QVERIFY(restored.compactDensity());QCOMPARE(restored.startPage(),QString("files"));QCOMPARE(restored.homeOrder(),b.homeOrder());QCOMPARE(restored.hiddenHomeSections(),b.hiddenHomeSections());}
     b.openStartPage();QCOMPARE(b.page(),QString("library"));QCOMPARE(b.libraryId(),QString("files"));
-    b.setStartPage("server");b.openStartPage();QCOMPARE(b.page(),QString("server"));
+    b.m_settings.setValue("startPage","retired-source");QCOMPARE(b.startPage(),QString("home"));b.openStartPage();QCOMPARE(b.page(),QString("home"));
     b.setStartPage("home");b.setCompactDensity(false);b.resetHomeLayout();QVERIFY(b.hiddenHomeSections().isEmpty());QVERIFY(b.homeOrder().isEmpty());
   }
   void playbackPolish() {
     Backend b;b.setPauseOnDisconnect(false);b.setWatchMusicFolders(false);b.m_sessions.clear();b.clearQueue();b.setVolume(0);b.setAutoplay(false);b.setPrepareNext(false);
     QTemporaryDir dir;const auto path=dir.filePath("track.wav");QProcess encode;encode.start("ffmpeg",{"-nostdin","-v","error","-f","lavfi","-i","sine=frequency=330:sample_rate=22050","-t","60",path});QVERIFY(encode.waitForFinished(10000));QCOMPARE(encode.exitCode(),0);
-    auto song=track("local_session");song.remove("videoId");song["localPath"]=path;song["seconds"]=60;song["album"]="Test album";song["artist"]="Artist";
+    auto song=track("local_session");song["localPath"]=path;song["seconds"]=60;song["album"]="Test album";song["artist"]="Artist";
     b.playItem(song);QTRY_VERIFY_WITH_TIMEOUT(b.playing(),5000);b.seek(12000);b.pause();b.setPlaybackRate(1.25);
     QVERIFY(b.saveSession("Focus"));const auto id=b.sessions().first().toMap().value("id").toString();QCOMPARE(b.sessions().size(),1);QVERIFY(!b.sessions().first().toMap().contains("queue"));
     b.renameSession(id,"Focus renamed");QCOMPARE(b.sessions().first().toMap().value("title").toString(),QString("Focus renamed"));
@@ -152,7 +303,7 @@ private slots:
     QCOMPARE(b.albumInfo().value("summary").toString(),QString("2026 · 2 tracks · 5 min"));
     QVERIFY(b.albumInfo().value("multipleDiscs").toBool());
     b.m_page="search";QVERIFY(b.albumInfo().isEmpty());
-    b.m_queue.assign({one,two});b.m_index=0;b.m_onlineMotionArt="file:///cached.mp4";
+    one["motionArt"]="file:///cached.mp4";b.m_queue.assign({one,two});b.m_index=0;
     QCOMPARE(b.currentMotionArt(),QString("file:///cached.mp4"));
     b.rejectArtwork();QVERIFY(b.currentMotionArt().isEmpty());
     b.m_index=1;QVERIFY(b.artworkChoice().isEmpty());b.m_index=0;QCOMPARE(b.artworkChoice(),QString("disabled"));
@@ -173,89 +324,8 @@ private slots:
     QVERIFY(QFile::copy(original,music.filePath("Four.wav")));QTest::qWait(1800);QCOMPARE(b.m_localTracks.size(),3);
     b.forgetMusicFolder(music.path());b.m_localTracks.clear();b.clearQueue();
   }
-  void videoFrameCovers() {
-    const auto oldHelper=qgetenv("SUNG_HELPER"),oldPython=qgetenv("SUNG_PYTHON"),oldBuffer=qgetenv("SUNG_BUFFER_FIXTURE");
-    qputenv("SUNG_HELPER",qgetenv("SUNG_FIXTURE_HELPER"));qputenv("SUNG_PYTHON","/usr/bin/python3");qputenv("SUNG_BUFFER_FIXTURE","1");
-    const auto restore=qScopeGuard([&]{qputenv("SUNG_HELPER",oldHelper);qputenv("SUNG_PYTHON",oldPython);qputenv("SUNG_BUFFER_FIXTURE",oldBuffer);});
-    Backend b;b.clearQueue();b.setVolume(0);b.setAutoplay(false);b.setPrepareNext(false);b.setUiActive(true);
-    b.m_settings.remove("videoCovers");b.m_videoCovers.clear();
-    b.setAlbumCovers(true);
-    const QUrl frame("https://i.ytimg.com/vi/coverTest01/hqdefault.jpg?sqp=-oaymwE");
-    const QUrl cover("https://is1-ssl.mzstatic.com/image/thumb/Fixture/100x100bb.jpg");
-    QVERIFY(b.albumCoverFor(frame).isEmpty());
-    // Asking for a cover is not asking for an animation: with every animation
-    // preference off, the lookup still runs for a song whose art is a frame.
-    b.setMotion(false);b.setAnimatedArtwork(false);b.setOnlineArtwork(false);
-    auto song=track("cover000001");song["videoId"]="coverTest01";song["artist"]="Fixture artist";song["art"]=frame.toString();
-    b.playItem(song);QTRY_VERIFY_WITH_TIMEOUT(b.playing(),5000);
-    QTRY_VERIFY_WITH_TIMEOUT(b.albumCoverFor(frame)==cover,6000);
-    QVERIFY(b.onlineMotionArt().isEmpty());QVERIFY(b.error().isEmpty());
-    // Everything that shows a cover outside the window follows the same answer.
-    QVERIFY(b.displayArt(song).startsWith("https://is1-ssl.mzstatic.com/"));
-    QVERIFY(b.displayArt(song).contains("600x600bb"));
-    // The preference decides whether the cover is used, not whether it is kept.
-    b.setAlbumCovers(false);QVERIFY(b.albumCoverFor(frame).isEmpty());
-    QCOMPARE(b.displayArt(song),artworkurl::sized(frame,600).toString());
-    b.setAlbumCovers(true);QCOMPARE(b.albumCoverFor(frame),cover);
-    // Playing it again answers from memory instead of asking the helper again.
-    b.stop();b.playItem(song);QTRY_VERIFY_WITH_TIMEOUT(b.playing(),5000);QTest::qWait(1600);
-    QVERIFY(!b.m_processes.contains("motion-artwork"));QCOMPARE(b.albumCoverFor(frame),cover);
-    // A song Apple has nothing for is remembered as such, and asked about once.
-    const QUrl other("https://i.ytimg.com/vi/coverTest02/hqdefault.jpg");
-    auto missing=track("cover000002");missing["videoId"]="coverTest02";missing["artist"]="Fixture artist";missing["title"]="no album cover";missing["art"]=other.toString();
-    b.playItem(missing);QTRY_VERIFY_WITH_TIMEOUT(b.playing(),5000);
-    QTRY_VERIFY_WITH_TIMEOUT(b.m_videoCovers.contains("coverTest02"),6000);
-    QVERIFY(b.albumCoverFor(other).isEmpty());
-    // Nothing is remembered for artwork that is not one of YouTube's frames.
-    QVERIFY(b.albumCoverFor(QUrl("https://yt3.googleusercontent.com/abc=w544-h544-l90-rj")).isEmpty());
-    // Looking again for one song drops only that song's answer.
-    b.stop();b.playItem(song);QTRY_VERIFY_WITH_TIMEOUT(b.playing(),5000);
-    b.retryArtwork();QVERIFY(!b.m_videoCovers.contains("coverTest01"));QVERIFY(b.m_videoCovers.contains("coverTest02"));
-    // A cache with a ceiling, not a library: it starts over rather than growing.
-    b.m_videoCovers.clear();
-    for(int i=0;i<2000;++i)b.rememberVideoCover(QString("pad%1").arg(i),QString());
-    QCOMPARE(b.m_videoCovers.size(),2000);
-    b.rememberVideoCover("oneMore",QString());QCOMPARE(b.m_videoCovers.size(),1);
-    // A song already in the cache is updated without emptying it.
-    b.rememberVideoCover("oneMore",cover.toString());QCOMPARE(b.m_videoCovers.size(),1);
-    b.stop();b.clearQueue();b.m_settings.remove("videoCovers");b.m_videoCovers.clear();
-    b.setMotion(true);b.setAnimatedArtwork(true);b.setOnlineArtwork(true);
-  }
-  void onlineArtworkLifecycle() {
-    const auto oldHelper=qgetenv("SUNG_HELPER"),oldPython=qgetenv("SUNG_PYTHON"),oldBuffer=qgetenv("SUNG_BUFFER_FIXTURE");
-    qputenv("SUNG_HELPER",qgetenv("SUNG_FIXTURE_HELPER"));qputenv("SUNG_PYTHON","/usr/bin/python3");qputenv("SUNG_BUFFER_FIXTURE","1");
-    const auto restore=qScopeGuard([&]{qputenv("SUNG_HELPER",oldHelper);qputenv("SUNG_PYTHON",oldPython);qputenv("SUNG_BUFFER_FIXTURE",oldBuffer);});
-    Backend b;b.clearQueue();b.setVolume(0);b.setAutoplay(false);b.setPrepareNext(false);
-    b.setMotion(true);b.setAnimatedArtwork(true);b.setOnlineArtwork(true);b.setUiActive(true);
-    auto song=track("motion00001");song["artist"]="Fixture artist";
-    b.playItem(song);QTRY_VERIFY_WITH_TIMEOUT(b.playing(),5000);
-    QTRY_VERIFY_WITH_TIMEOUT(!b.onlineMotionArt().isEmpty(),4000);
-    QVERIFY(!b.current().contains("motionArt"));QVERIFY(b.error().isEmpty());
-    const auto url=b.onlineMotionArt();b.pause();QCOMPARE(b.onlineMotionArt(),url);
-    b.setOnlineArtwork(false);QVERIFY(b.onlineMotionArt().isEmpty());
-    b.setOnlineArtwork(true);QTest::qWait(1100);QVERIFY(b.onlineMotionArt().isEmpty());
-    b.toggle();QTRY_VERIFY_WITH_TIMEOUT(!b.onlineMotionArt().isEmpty(),3000);
-    b.clearCache();QVERIFY(b.onlineMotionArt().isEmpty());QVERIFY(!QFile::exists(QUrl(url).toLocalFile()));
-    QTest::qWait(1100);QVERIFY(b.onlineMotionArt().isEmpty());QVERIFY(b.playing());
-    song["id"]="motion00002";song["videoId"]="motion00002";song["title"]="slow motion";
-    b.playItem(song);QTRY_VERIFY_WITH_TIMEOUT(b.m_processes.contains("motion-artwork"),4000);
-    b.setUiActive(false);QVERIFY(!b.m_processes.contains("motion-artwork"));QVERIFY(b.onlineMotionArt().isEmpty());
-    b.setUiActive(true);QTRY_VERIFY_WITH_TIMEOUT(b.m_processes.contains("motion-artwork"),3000);
-    song["id"]="motion00005";song["videoId"]="motion00005";song["title"]="missing motion";
-    b.playItem(song);QTRY_VERIFY_WITH_TIMEOUT(b.playing(),4000);QTest::qWait(2600);
-    QVERIFY(b.onlineMotionArt().isEmpty());QVERIFY(b.error().isEmpty());QVERIFY(b.playing());
-    song["id"]="motion00006";song["videoId"]="motion00006";song["title"]="slow motion";
-    b.playItem(song);QTRY_VERIFY_WITH_TIMEOUT(b.m_processes.contains("motion-artwork"),4000);
-    b.setAnimatedArtwork(false);QVERIFY(!b.m_processes.contains("motion-artwork"));
-    QTest::qWait(2200);QVERIFY(b.onlineMotionArt().isEmpty());QVERIFY(b.playing());
-    b.setAnimatedArtwork(true);song["id"]="motion00007";song["videoId"]="motion00007";song["title"]="retry motion";
-    b.playItem(song);QTRY_VERIFY_WITH_TIMEOUT(!b.onlineMotionArt().isEmpty(),6000);
-    QCOMPARE(b.m_onlineArtworkRetries,1);QVERIFY(b.playing());QVERIFY(b.error().isEmpty());
-    song["id"]="motion00008";song["videoId"]="motion00008";song["title"]="retry forever";
-    b.playItem(song);QTRY_VERIFY_WITH_TIMEOUT(b.playing(),4000);QTest::qWait(4000);
-    QFile attempts(QStandardPaths::writableLocation(QStandardPaths::CacheLocation)+"/motion-art/attempt-count");QVERIFY(attempts.open(QIODevice::ReadOnly));QCOMPARE(attempts.readAll(),QByteArray("2"));QVERIFY(b.playing());QVERIFY(b.error().isEmpty());
-    b.stop();b.clearQueue();b.setAnimatedArtwork(true);
-  }
+
+
   void measuredAudioBands() {
     const auto pcm=[](double frequency,double amplitude,QAudioFormat::SampleFormat type,bool inverseStereo=false){
       QAudioFormat f;f.setSampleRate(48000);f.setChannelCount(inverseStereo?2:1);f.setSampleFormat(type);
@@ -350,12 +420,13 @@ private slots:
     Backend b;b.m_playlists.clear();b.m_localTracks.clear();b.m_favorites.clear();b.m_lastPlayed.clear();
     auto a=track("smart000001"),c=track("smart000002"),d=track("smart000003");
     a["artist"]="Example Artist";c["artist"]="Different Artist";d["artist"]="Example Artist";
-    d.remove("videoId");d["id"]="local_smart000003";d["localPath"]="/tmp/missing-song.flac";
+    a["source"]="local";a["localPath"]="/tmp/a.flac";c["source"]="local";c["localPath"]="/tmp/c.flac";d["source"]="local";
+    d["id"]="local_smart000003";d["localPath"]="/tmp/missing-song.flac";
     b.m_localTracks={d};b.m_favorites={a};auto regular=b.createPlaylist("Saved");b.addItemsToPlaylist(regular,{a,c});
     const auto id=b.saveSmartPlaylist({},"Example",{{"artist","EXAMPLE"}});QVERIFY(!id.isEmpty());
     b.openPlaylist(id);QCOMPARE(b.results()->count(),2);
     b.addItemsToPlaylist(id,{c});b.removePlaylistRows(id,{0});b.movePlaylistTrack(id,0,1);QCOMPARE(b.results()->count(),2);
-    b.saveSmartPlaylist(id,"Online",{{"source","youtube"},{"likedOnly",true}});QCOMPARE(b.results()->count(),1);
+    b.saveSmartPlaylist(id,"Liked files",{{"source","local"},{"likedOnly",true}});QCOMPARE(b.results()->count(),1);
     b.toggleLike(c);QCOMPARE(b.results()->count(),2);b.toggleLike(a);QCOMPARE(b.results()->count(),1);
     b.m_lastPlayed[c.value("id").toString()]=QDateTime::currentSecsSinceEpoch()-qint64(40)*86400;
     b.saveSmartPlaylist(id,"Older",{{"days",30}});QCOMPARE(b.results()->count(),1);QCOMPARE(b.results()->get(0).value("id"),c.value("id"));
@@ -367,9 +438,9 @@ private slots:
     auto details=b.trackDetails(d);QVERIFY(!details.isEmpty());
     bool missing=false;for(const auto &v:details)if(v.toMap().value("value")=="File missing")missing=true;QVERIFY(missing);
     a["streamUrl"]="https://private.invalid/?token=secret";for(const auto &v:b.trackDetails(a))QVERIFY(!v.toMap().value("value").toString().contains("secret"));
-    Entries entries;entries.assign({a,d,c});QCOMPARE(entries.data(entries.index(0),Qt::UserRole+1).toString(),QString("YouTube Music"));QCOMPARE(entries.data(entries.index(1),Qt::UserRole+1).toString(),QString("Local files"));QCOMPARE(entries.count(),3);
+    Entries entries;entries.assign({a,d,c});QCOMPARE(entries.data(entries.index(0),Qt::UserRole+1).toString(),QString("Local files"));QCOMPARE(entries.data(entries.index(1),Qt::UserRole+1).toString(),QString("Local files"));QCOMPARE(entries.count(),3);
     b.m_playlists.clear();b.m_localTracks.clear();b.m_favorites.clear();b.m_lastPlayed.clear();
-    const auto temporary=b.saveSmartPlaylist({},"Temporary",{});b.openPlaylist(temporary);b.undo();QCOMPARE(b.page(),QString("library"));QCOMPARE(b.libraryId(),QString("playlists"));
+    const auto temporary=b.saveSmartPlaylist({},"Temporary",{});b.openPlaylist(temporary);b.undo();QCOMPARE(b.page(),QString("library"));QCOMPARE(b.libraryId(),QString("local-playlists"));
   }
   void viewOptionsAndDuplicateAdditions() {
     Backend b;b.m_playlists.clear();b.m_favorites={track("qol00000001"),track("qol00000002")};
@@ -416,8 +487,8 @@ private slots:
     const auto secondPath=music.filePath("Two.wav");QVERIFY(QFile::copy(path,secondPath));b.rescanMusicFolders();QTRY_VERIFY(!b.importingLocal());QCOMPARE(b.m_localTracks.size(),2);
     b.save();b.load();QCOMPARE(b.musicFolders(),QStringList{music.path()});
     auto missing=b.m_localTracks.last().toMap();QVERIFY(QFile::remove(secondPath));b.rescanMusicFolders();QTRY_VERIFY(!b.importingLocal());QCOMPARE(b.m_localTracks.size(),2);
-    auto youtube=track("abcdefghijk");const auto id=b.createPlaylist("Cleanup fixture");
-    const QVariantList original{first,youtube,first,missing,youtube};
+    auto qqTrack=track("abcdefghijk");const auto id=b.createPlaylist("Cleanup fixture");
+    const QVariantList original{first,qqTrack,first,missing,qqTrack};
     b.m_playlists={QVariantMap{{"id",id},{"title","Cleanup fixture"},{"tracks",original}}};b.openPlaylist(id);
     b.inspectPlaylist(id);QTRY_VERIFY(!b.cleanupBusy());QCOMPARE(b.cleanupItems().size(),3);
     b.applyPlaylistCleanup(true,false);QTRY_VERIFY(!b.cleanupBusy());QCOMPARE(b.results()->count(),3);QVERIFY(b.playing());QCOMPARE(b.media()->source(),source);QVERIFY(QFile::exists(path));
@@ -444,13 +515,13 @@ private slots:
       QVERIFY(encode.waitForFinished(10000));QCOMPARE(encode.exitCode(),0);
     }
     QFile lyrics(music.filePath("First song.lrc"));QVERIFY(lyrics.open(QIODevice::WriteOnly));lyrics.write("[00:01] A quiet morning\n[00:03] Another line\n[00:05] A QUIET evening");lyrics.close();
-    Backend b;b.setVolume(0);b.setLyricsFallback(false);b.clearQueue();b.setAutoplay(false);
+    Backend b;b.setVolume(0);b.clearQueue();b.setAutoplay(false);
     const QVariantList urls{QUrl::fromLocalFile(music.filePath("First song.flac")),QUrl::fromLocalFile(music.filePath("Second song.mp3"))};
     b.importLocalFiles(urls);QTRY_VERIFY_WITH_TIMEOUT(!b.importingLocal(),15000);b.library("files");QCOMPARE(b.results()->count(),2);
     auto first=b.results()->get(0),second=b.results()->get(1);QVERIFY(first.value("videoId").toString().isEmpty());QCOMPARE(first.value("artist").toString(),"Fixture artist");QCOMPARE(first.value("seconds").toInt(),12);
     b.importLocalFiles(urls);QTRY_VERIFY_WITH_TIMEOUT(!b.importingLocal(),10000);QCOMPARE(b.results()->count(),2);
     RowSelection selection;selection.setModel(b.results());selection.selectAll();QCOMPARE(selection.count(),2);
-    const auto playlist=b.createPlaylist("Mixed sources");auto youtube=track("abcdefghijk");b.addItemsToPlaylist(playlist,{first,youtube,second});b.openPlaylist(playlist);QCOMPARE(b.results()->count(),3);
+    const auto playlist=b.createPlaylist("Mixed sources");auto qqTrack=track("abcdefghijk");b.addItemsToPlaylist(playlist,{first,qqTrack,second});b.openPlaylist(playlist);QCOMPARE(b.results()->count(),3);
     b.playCollection(0);QTRY_VERIFY_WITH_TIMEOUT(b.playing()&&b.duration()>0,5000);QCOMPARE(b.media()->source(),urls[0].toUrl());QVERIFY(!b.m_processes.contains("play"));
     b.fetchLyrics();QCOMPARE(b.lyricsSource(),"Local LRC");auto matches=b.searchLyrics("quiet");QCOMPARE(matches.size(),2);QCOMPARE(matches.last().toMap().value("start").toLongLong(),5000);QVERIFY(b.searchLyrics("missing").isEmpty());
     b.setLyricOffset(250);b.seekLyric(matches.last().toMap().value("start").toLongLong());QCOMPARE(b.position(),4750);
@@ -464,7 +535,7 @@ private slots:
     b.removeLocalFile(first.value("id").toString());QVERIFY(QFile::exists(music.filePath("Moved.flac")));QCOMPARE(b.results()->count(),3);
     b.applyLyrics({{"ok",true},{"lyrics","Quiet text\nAnother quiet line"}});QCOMPARE(b.searchLyrics("quiet").size(),2);QCOMPARE(b.searchLyrics("quiet").first().toMap().value("start").toInt(),-1);
     b.importLocalFiles(urls);b.cancelLocalImport();QTest::qWait(150);QVERIFY(!b.importingLocal());
-    b.stop();b.deletePlaylist(playlist);b.m_localTracks.clear();b.clearQueue();b.setLyricsFallback(true);b.setAutoplay(true);
+    b.stop();b.deletePlaylist(playlist);b.m_localTracks.clear();b.clearQueue();b.setAutoplay(true);
   }
   // The play log keeps 20,000 rows. The listening graph keeps every day's
   // total besides, so a heavy listener's earlier months stay on it, and a day
@@ -510,6 +581,7 @@ private slots:
     QVERIFY(Lrc::parse("[ar:Artist] No timing").isEmpty());QVERIFY(Lrc::parse("[00:77] Invalid").isEmpty());QVERIFY(Lrc::parse(QString(262145,'x')).isEmpty());
     Backend b;b.clearQueue();b.setShuffle(false);b.setRepeat(0);b.setAutoplay(false);b.setPrepareNext(true);
     auto a=track("prepare0001"),next=track("prepare0002"),slow=track("prepare0003"),fail=track("prepare0004");
+    a["id"]="qq_"+QString(64,'a');
     for(auto t:{a,next,slow,fail})b.enqueue(t);
     b.playAt(0);QTRY_VERIFY_WITH_TIMEOUT(b.playing()&&!b.resolving(),10000);
     const auto source=b.media()->source();QVERIFY(source.isLocalFile());const auto token=b.trackToken();
@@ -537,7 +609,7 @@ private slots:
     QTemporaryDir files;QFile lrc(files.filePath("lyrics.lrc"));QVERIFY(lrc.open(QIODevice::WriteOnly));lrc.write("[00:01.00] First\n[00:03.00] Second");lrc.close();
     b.importLyrics(QUrl::fromLocalFile(lrc.fileName()),a.value("id").toString());QVERIFY(b.lyricsSource()!="Imported LRC");
     b.playAt(0);b.fetchLyrics();QCOMPARE(b.lyricsSource(),"Imported LRC");QCOMPARE(b.lyricLines().size(),2);QTRY_VERIFY(b.playing()&&!b.resolving());b.seek(1500);QCOMPARE(b.lyricIndex(),0);
-    b.resetLyrics();QTRY_VERIFY(!b.lyricsBusy());QCOMPARE(b.lyricsSource(),"YouTube");
+    b.resetLyrics();QTRY_VERIFY(!b.lyricsBusy());QCOMPARE(b.lyricsSource(),"QQ Music");
     // Saved tracks deduplicate across mixes and track plays separately from list order.
     b.m_favorites={a,next,slow};b.m_playlists={QVariantMap{{"id","mix-test"},{"tracks",QVariantList{a,fail}}}};
     b.m_lastPlayed={{a.value("id").toString(),QDateTime::currentSecsSinceEpoch()-31*86400},{next.value("id").toString(),QDateTime::currentSecsSinceEpoch()}};
@@ -551,7 +623,7 @@ private slots:
     Backend b;b.clearQueue();for(const auto &q:b.recentSearches())b.removeRecentSearch(q);
     b.rememberSearch("  Blue   sky ");b.rememberSearch("blue sky");QCOMPARE(b.recentSearches().size(),1);
     b.setHistoryPaused(true);b.rememberSearch("private");QCOMPARE(b.recentSearches().size(),1);b.setHistoryPaused(false);
-    b.rememberSearch("https://music.youtube.com/watch?v=secret");QCOMPARE(b.recentSearches().size(),1);
+    b.rememberSearch("https://y.qq.com/n/ryqq/songDetail/secret");QCOMPARE(b.recentSearches().size(),1);
     for(int i=0;i<20;++i)b.rememberSearch(QString::number(i));QCOMPARE(b.recentSearches().size(),12);
     b.removeRecentSearch("19");QCOMPARE(b.recentSearches().first(),"18");
     QVariantList songs;for(int i=0;i<6;++i){auto t=track(QString("bulk%1").arg(i,7,10,QChar('0')));t["title"]=QString("Nebula %1").arg(i);t["seconds"]=120;songs.append(t);}
@@ -623,14 +695,7 @@ private slots:
     {Backend b;b.setLyricTextSize(28);QCOMPARE(b.lyricTextSize(),28);}
     Backend b;QCOMPARE(b.lyricTextSize(),28);b.setLyricTextSize(2);QCOMPARE(b.lyricTextSize(),20);b.setLyricTextSize(100);QCOMPARE(b.lyricTextSize(),32);b.setLyricTextSize(25);
   }
-  void streamingQualityPreference() {
-    Backend b;
-    QCOMPARE(b.streamingQuality(),QString("standard"));
-    b.setStreamingQuality("saver");QCOMPARE(b.streamingQuality(),QString("saver"));
-    for(const auto &bad:{"","lossless","SAVER"})b.setStreamingQuality(bad);
-    QCOMPARE(b.streamingQuality(),QString("saver"));
-    b.setStreamingQuality("standard");QCOMPARE(b.streamingQuality(),QString("standard"));
-  }
+
   void listeningPreferences() {
     {Backend b;QVERIFY(!b.historyPaused());b.setHistoryPaused(true);b.setKeepCompletedLyrics(false);b.setVolumeStep(2);b.setVolumeStep(7);QCOMPARE(b.volumeStep(),2);}
     Backend b;QVERIFY(!b.historyPaused());QVERIFY(!b.keepCompletedLyrics());QCOMPARE(b.volumeStep(),2);b.setKeepCompletedLyrics(true);b.setVolumeStep(5);
@@ -709,7 +774,7 @@ private slots:
     {
       Backend b;
       b.clearQueue();
-      auto t = track("favorite001");
+      auto t = track("favorite001");t["source"]="local";t["localPath"]="/tmp/favorite001.wav";
       if (b.isLiked("favorite001"))
         b.toggleLike(t);
       b.toggleLike(t);
@@ -736,7 +801,7 @@ private slots:
       b.removeFromPlaylist(id, 0);
       QCOMPARE(b.results()->count(), 0);
       b.deletePlaylist(id);
-      b.toggleLike(track("favorite001"));
+      auto t=track("favorite001");t["source"]="local";t["localPath"]="/tmp/favorite001.wav";b.toggleLike(t);
       QVERIFY(!b.isLiked("favorite001"));
     }
   }
@@ -781,7 +846,7 @@ private slots:
     b.openPlaylist(id);
     QCOMPARE(b.results()->count(),1);
     b.copyLink(track("aaaaaaaaaaa"));
-    QCOMPARE(QGuiApplication::clipboard()->text(),"https://music.youtube.com/watch?v=aaaaaaaaaaa");
+    QCOMPARE(QGuiApplication::clipboard()->text(),"https://y.qq.com/n/ryqq/songDetail/aaaaaaaaaaa");
     b.notifyError("ConnectionError: private details", "catalog");
     QVERIFY(b.canRetry());
     QVERIFY(!b.error().contains("private details"));
@@ -797,6 +862,7 @@ private slots:
     b.home();
     QTRY_VERIFY_WITH_TIMEOUT(!b.busy(),5000);
     QCOMPARE(b.sections().size(),1);
+
     b.search("slow");
     b.search("latest","songs");
     QTRY_VERIFY_WITH_TIMEOUT(!b.busy(),5000);
@@ -806,7 +872,7 @@ private slots:
     b.more();
     QTRY_VERIFY_WITH_TIMEOUT(!b.busy(),5000);
     QCOMPARE(b.results()->count(),60);
-    b.open({{"kind","album"},{"browseId","ALBUM"},{"title","Album"}});
+    b.open({{"kind","album"},{"source","qqmusic"},{"browseId","ALBUM"},{"title","Album"}});
     QTRY_VERIFY_WITH_TIMEOUT(!b.busy(),5000);
     QCOMPARE(b.results()->count(),2);
     b.back();
@@ -822,7 +888,7 @@ private slots:
     QTRY_VERIFY_WITH_TIMEOUT(!b.busy(),5000);
     QVERIFY(b.error().isEmpty());
     QCOMPARE(b.results()->count(),0);
-    b.openLink("https://music.youtube.com/watch?v=00000000001");
+    b.openLink("https://y.qq.com/n/ryqq/songDetail/00000000001");
     QTRY_VERIFY_WITH_TIMEOUT(!b.busy(),5000);
     QCOMPARE(b.results()->count(),2);
     b.clearQueue();
@@ -846,7 +912,7 @@ private slots:
     b.fetchLyrics();
     QTRY_VERIFY_WITH_TIMEOUT(!b.lyricsBusy(),5000);
     QCOMPARE(b.lyrics(),"Test lyrics");
-    b.radio(track("00000000001"));
+    b.radio(b.results()->get(0));
     QTRY_COMPARE_WITH_TIMEOUT(b.queue()->count(),4,5000);
     b.stop();
     qunsetenv("SUNG_HELPER");
@@ -900,23 +966,7 @@ private slots:
     }
     qunsetenv("SUNG_HELPER");qunsetenv("SUNG_PYTHON");
   }
-  void cookieImportAndRemoval() {
-    Backend b;
-    QTemporaryDir files;
-    auto path=files.filePath("cookies.txt");
-    QFile f(path); QVERIFY(f.open(QIODevice::WriteOnly));
-    f.write("# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t0\ttest\tfixture\n"); f.close();
-    b.setCookieFile(QUrl::fromLocalFile(path));
-    QVERIFY(!b.cookies().isEmpty());
-    const auto saved=b.cookies();
-    QVERIFY(QFile::exists(saved));
-    QVERIFY(!(QFile::permissions(saved) & (QFile::ReadOther|QFile::ReadGroup)));
-    b.clearCookies();
-    QVERIFY(b.cookies().isEmpty());
-    QVERIFY(!QFile::exists(saved));
-    b.setCookieFile(QUrl::fromLocalFile(files.filePath("missing")));
-    QVERIFY(!b.error().isEmpty());
-  }
+
   void noctaliaUpdatesAtomically() {
     QTemporaryDir files;
     const auto path=files.filePath("noctalia.colors");

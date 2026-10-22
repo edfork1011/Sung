@@ -1,154 +1,45 @@
-#!/usr/bin/env python3
-"""Repeatable verification. All profiles, logs, and captures stay in the report folder."""
-import argparse, datetime, json, os, pathlib, re, shutil, subprocess, sys, time
-from xml.sax.saxutils import escape
-root=pathlib.Path(__file__).resolve().parents[1]
-p=argparse.ArgumentParser(description=__doc__)
-p.add_argument('--offline',action='store_true',help='Skip network-dependent playback checks; report them as skipped')
-p.add_argument('--output',type=pathlib.Path,help='Report folder (created with private permissions)')
-p.add_argument('--jobs',type=int,default=4)
-p.add_argument('--build-dir',type=pathlib.Path,help='Reuse a diagnostic build directory')
-a=p.parse_args()
-out=(a.output or root/'verification'/datetime.datetime.now().strftime('%Y%m%d-%H%M%S')).resolve()
-out.mkdir(parents=True,exist_ok=False);out.chmod(0o700)
-rows=[]
-def stage(name,cmd,timeout=600,env=None):
-    print(f'▶ {name}',flush=True)
-    start=time.monotonic()
-    target=out/(name+'.log')
-    try:
-        with target.open('w') as log:
-            r=subprocess.run(cmd,cwd=root,env=env,stdout=log,stderr=subprocess.STDOUT,timeout=timeout)
-        text=target.read_text(errors='replace')
-        problems=re.findall(r'(?:ReferenceError|TypeError|Binding loop|Unable to assign|Cannot assign|FAIL)[^\n]*',text)
-        good=r.returncode==0 and not problems
-        why='; '.join(problems[:3]) if problems else f'exit {r.returncode}'
-    except (subprocess.TimeoutExpired,OSError) as e:
-        good=False;why=str(e)
-    rows.append(dict(stage=name,status='pass' if good else 'fail',seconds=round(time.monotonic()-start,2),detail=why,log=target.name))
-    print(f'  {"PASS" if good else "FAIL"} {name} ({rows[-1]["seconds"]}s)',flush=True)
-    return good
-build=a.build_dir.resolve() if a.build_dir else out/'build'
-env=os.environ.copy()
-# Do not inherit a desktop-forced threaded render loop into the software harness.
-# Qt Quick Shapes can race window teardown there; native GPU tests keep their own loop.
-env.update(QT_FORCE_STDERR_LOGGING='1',QT_QPA_PLATFORMTHEME='generic',QT_QPA_PLATFORM='offscreen',QT_QUICK_BACKEND='software',QSG_RENDER_LOOP='basic',QT_FFMPEG_DECODING_HW_DEVICE_TYPES=',',QT_FFMPEG_ENCODING_HW_DEVICE_TYPES=',')
-# Isolated XDG_DATA_HOME also hides user-installed fonts from fontconfig.
-# Expose only the requested font directory, not the user's application data.
-if shutil.which('fc-match'):
-    font_file=subprocess.check_output(['fc-match','Google Sans Flex','-f','%{file}'],text=True).strip()
-    font_config=out/'fonts.conf'
-    font_config.write_text('<?xml version="1.0"?><!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd"><fontconfig><include>/etc/fonts/fonts.conf</include><dir>'+escape(str(pathlib.Path(font_file).parent))+'</dir></fontconfig>')
-    env['FONTCONFIG_FILE']=str(font_config)
+"""Build and verify the QQ Music/local-media client using isolated fixtures."""
+import argparse
+import datetime
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import time
 
-def profile(name):
-    e=env.copy();base=out/name
-    for var,folder in [('XDG_CONFIG_HOME','config'),('XDG_DATA_HOME','data'),('XDG_CACHE_HOME','cache')]:e[var]=str(base/folder)
-    return e
-ready=stage('configure',['cmake','-S',str(root),'-B',str(build),'-G','Ninja','-DCMAKE_BUILD_TYPE=Release','-DBUILD_TESTING=ON','-DSUNG_DIAGNOSTICS=ON'])
-if ready: ready=stage('build',['cmake','--build',str(build),'--parallel',str(max(1,a.jobs))])
-if ready:
-    stage('backend',['ctest','--test-dir',str(build),'--output-on-failure'],120,profile('unit-profile'))
-    stage('catalog',['python3','-m','unittest','discover','-s',str(root/'tests'),'-p','test_*.py'],60,env)
-    if shutil.which('dbus-run-session') and shutil.which('qdbus6'):
-        stage('mpris',['dbus-run-session','--','python3',str(root/'tests/mpris_test.py'),str(build/'sung')],40,profile('mpris-profile'))
-    else: rows.append(dict(stage='mpris',status='fail',detail='dbus-run-session and qdbus6 are required'))
-    stage("immersive-regression",[sys.executable,str(root/"tests/immersive_regression.py"),"--binary",str(build/"sung"),"--output",str(out/"immersive-regression")],780,env)
-    e=profile("interaction-refinement-profile");e.update(SUNG_HELPER=str(root/"tests/catalog_fixture.py"),SUNG_PYTHON="/usr/bin/python3",SUNG_TEST_OUTPUT=str(out/"interaction-refinement"))
-    stage("interaction-refinement",[str(build/"sung"),"--isolated","--interaction-refinement-test"],120,e)
-    e=profile("listening-refinement-profile");e.update(SUNG_HELPER=str(root/"tests/catalog_fixture.py"),SUNG_PYTHON="/usr/bin/python3",SUNG_TEST_OUTPUT=str(out/"listening-refinement"))
-    stage("listening-refinement",[str(build/"sung"),"--isolated","--listening-refinement-test"],90,e)
-    e=profile("visual-refinement-profile");e.update(SUNG_HELPER=str(root/"tests/catalog_fixture.py"),SUNG_PYTHON="/usr/bin/python3",SUNG_TEST_OUTPUT=str(out/"visual-refinement"))
-    stage("visual-refinement",[str(build/"sung"),"--isolated","--visual-refinement-test"],90,e)
-    e=profile("online-artwork-profile");e.update(SUNG_HELPER=str(root/"tests/catalog_fixture.py"),SUNG_PYTHON="/usr/bin/python3",SUNG_TEST_OUTPUT=str(out/"online-artwork"))
-    stage("online-artwork",[str(build/"sung"),"--isolated","--online-artwork-test"],60,e)
-    e=profile("local-artwork-profile");e.update(SUNG_HELPER=str(root/"tests/catalog_fixture.py"),SUNG_PYTHON="/usr/bin/python3",SUNG_TEST_OUTPUT=str(out/"local-artwork"))
-    stage("local-artwork",[str(build/"sung"),"--isolated","--local-artwork-test"],90,e)
-    e=profile("folder-import-profile");e.update(SUNG_HELPER=str(root/"tests/catalog_fixture.py"),SUNG_PYTHON="/usr/bin/python3",SUNG_TEST_OUTPUT=str(out/"folder-import"))
-    stage("folder-import",[str(build/"sung"),"--isolated","--folder-import-test"],60,e)
-    e=profile('search-selection-profile');e.update(SUNG_HELPER=str(root/'tests/catalog_fixture.py'),SUNG_PYTHON='/usr/bin/python3',SUNG_TEST_OUTPUT=str(out/'search-selection'))
-    stage('search-selection',[str(build/'sung'),'--isolated','--search-selection-test'],120,e)
-    e=profile("qol-profile");e.update(SUNG_HELPER=str(root/"tests/catalog_fixture.py"),SUNG_PYTHON="/usr/bin/python3",SUNG_TEST_OUTPUT=str(out/"qol"))
-    stage("qol",[str(build/"sung"),"--isolated","--qol-test"],60,e)
-    e=profile("interaction-profile");e.update(SUNG_HELPER=str(root/"tests/catalog_fixture.py"),SUNG_PYTHON="/usr/bin/python3",SUNG_TEST_OUTPUT=str(out/"interaction"))
-    stage("interaction",[str(build/"sung"),"--isolated","--interaction-test"],90,e)
-    e=profile("product-polish-profile");e.update(SUNG_HELPER=str(root/"tests/catalog_fixture.py"),SUNG_PYTHON="/usr/bin/python3",SUNG_BUFFER_FIXTURE="1",SUNG_TEST_OUTPUT=str(out/"product-polish"))
-    stage("product-polish",[str(build/"sung"),"--isolated","--product-polish-test"],90,e)
-    e=profile("library-polish-profile");e.update(SUNG_HELPER=str(root/"tests/catalog_fixture.py"),SUNG_PYTHON="/usr/bin/python3",SUNG_TEST_OUTPUT=str(out/"library-polish"))
-    stage("library-polish",[str(build/"sung"),"--isolated","--library-polish-test"],90,e)
-    e=profile("playback-polish-profile");e.update(SUNG_HELPER=str(root/"tests/catalog_fixture.py"),SUNG_PYTHON="/usr/bin/python3",SUNG_TEST_OUTPUT=str(out/"playback-polish"))
-    stage("playback-polish",[str(build/"sung"),"--isolated","--playback-polish-test"],90,e)
-    e=profile("audio-indicator-profile");e.update(SUNG_TEST_OUTPUT=str(out/"audio-indicator"))
-    stage("audio-indicator",[str(build/"sung"),"--isolated","--audio-indicator-test"],40,e)
-    e=profile("visual-delight-profile");e.update(SUNG_HELPER=str(root/"tests/catalog_fixture.py"),SUNG_PYTHON="/usr/bin/python3",SUNG_TEST_OUTPUT=str(out/"visual-delight"))
-    stage("visual-delight",[str(build/"sung"),"--isolated","--visual-delight-test"],90,e)
-    e=profile("library-qol-profile");e.update(SUNG_HELPER=str(root/"tests/catalog_fixture.py"),SUNG_PYTHON="/usr/bin/python3",SUNG_TEST_OUTPUT=str(out/"library-qol"))
-    stage("library-qol",[str(build/"sung"),"--isolated","--library-qol-test"],60,e)
-    e=profile("visual-polish-profile");e.update(SUNG_HELPER=str(root/"tests/catalog_fixture.py"),SUNG_PYTHON="/usr/bin/python3",SUNG_TEST_OUTPUT=str(out/"visual-polish"))
-    stage("visual-polish",[str(build/"sung"),"--isolated","--visual-polish-test"],40,e)
-    e=profile("ambient-immersive-profile");e.update(SUNG_HELPER=str(root/"tests/catalog_fixture.py"),SUNG_PYTHON="/usr/bin/python3",SUNG_TEST_OUTPUT=str(out/"ambient-immersive"))
-    stage("ambient-immersive",[str(build/"sung"),"--isolated","--ambient-immersive-test"],180,e)
-    e=profile("personalization-profile");e.update(SUNG_HELPER=str(root/"tests/catalog_fixture.py"),SUNG_PYTHON="/usr/bin/python3",SUNG_TEST_OUTPUT=str(out/"personalization"))
-    stage("personalization",[str(build/"sung"),"--isolated","--personalization-test"],180,e)
-    e=profile("home-rail-profile");e.update(SUNG_HELPER=str(root/"tests/catalog_fixture.py"),SUNG_PYTHON="/usr/bin/python3",SUNG_TEST_OUTPUT=str(out/"home-rail"))
-    stage("home-rail",[str(build/"sung"),"--isolated","--home-rail-test"],180,e)
-    e=profile("onboarding-profile");e.update(SUNG_HELPER=str(root/"tests/catalog_fixture.py"),SUNG_PYTHON="/usr/bin/python3",SUNG_TEST_OUTPUT=str(out/"onboarding"))
-    stage("onboarding",[str(build/"sung"),"--isolated","--onboarding-test"],180,e)
-    e=profile("library-exchange-profile");e.update(SUNG_HELPER=str(root/"tests/catalog_fixture.py"),SUNG_PYTHON="/usr/bin/python3",SUNG_TEST_OUTPUT=str(out/"library-exchange"))
-    stage("library-exchange",[str(build/"sung"),"--isolated","--library-exchange-test"],300,e)
-    e=profile("backdrop-pulse-profile");e.update(SUNG_HELPER=str(root/"tests/catalog_fixture.py"),SUNG_PYTHON="/usr/bin/python3",SUNG_TEST_OUTPUT=str(out/"backdrop-pulse"))
-    stage("backdrop-pulse",[str(build/"sung"),"--isolated","--backdrop-pulse-test"],240,e)
-    e=profile("playback-memory-profile");e.update(SUNG_HELPER=str(root/"tests/catalog_fixture.py"),SUNG_PYTHON="/usr/bin/python3",SUNG_TEST_OUTPUT=str(out/"playback-memory"))
-    stage("playback-memory",[str(build/"sung"),"--isolated","--playback-memory-test"],420,e)
-    e=profile("footprint-profile");e.update(SUNG_HELPER=str(root/"tests/catalog_fixture.py"),SUNG_PYTHON="/usr/bin/python3",SUNG_TEST_OUTPUT=str(out/"footprint"))
-    stage("footprint",[str(build/"sung"),"--isolated","--footprint-test"],120,e)
-    for name,flag in [("dynamic-color","--dynamic-color-test"),("navigation-motion","--navigation-motion-test"),
-                      ("artist-hero","--artist-hero-test"),("singalong","--singalong-test"),
-                      ("crossfade-ui","--crossfade-ui-test"),("track-details","--track-details-test"),
-                      ("queue-history","--queue-history-test"),
-                      ("window-wash","--window-wash-test"),
-                      ("motion-layout","--motion-layout-test"),
-                      ("material-foundations","--material-foundations-test"),
-                      ("material-components","--material-components-test"),
-                      ("material-conformance","--material-conformance-test"),
-                      ("material-detail","--material-detail-test"),
-                      ("material-expressive","--material-expressive-test"),
-                      ("material-sizing","--material-sizing-test"),
-                      ("material-scheme","--material-scheme-test"),
-                      ("material-grain","--material-grain-test"),
-                      ("material-scale","--material-scale-test"),
-                      ("material-controls","--material-controls-test"),
-                      ("material-anatomy","--material-anatomy-test"),
-                      ("material-emphasis","--material-emphasis-test")]:
-        e=profile(name+"-profile");e.update(SUNG_HELPER=str(root/"tests/catalog_fixture.py"),SUNG_PYTHON="/usr/bin/python3",SUNG_TEST_OUTPUT=str(out/name))
-        stage(name,[str(build/"sung"),"--isolated",flag],420,e)
-    e=profile("cider-profile");e.update(SUNG_HELPER=str(root/"tests/catalog_fixture.py"),SUNG_PYTHON="/usr/bin/python3",SUNG_CIDER_FIXTURE=str(root/"tests/cider_fixture.py"),SUNG_OUTPUT_TAP=str(root/"tests/monitor_fixture.py"),SUNG_TEST_OUTPUT=str(out/"cider"))
-    stage("cider",[str(build/"sung"),"--isolated","--cider-test"],300,e)
-    e=profile("interface-audit-profile");e.update(SUNG_HELPER=str(root/"tests/catalog_fixture.py"),SUNG_PYTHON="/usr/bin/python3",SUNG_TEST_OUTPUT=str(out/"interface-audit"))
-    stage("interface-audit",[str(build/"sung"),"--isolated","--interface-audit-test"],300,e)
-    e=profile("layout-audit-profile");e.update(SUNG_HELPER=str(root/"tests/catalog_fixture.py"),SUNG_PYTHON="/usr/bin/python3",SUNG_TEST_OUTPUT=str(out/"layout-audit"))
-    stage("layout-audit",[str(build/"sung"),"--isolated","--layout-audit-test"],480,e)
-    e=profile("colour-audit-profile");e.update(SUNG_HELPER=str(root/"tests/catalog_fixture.py"),SUNG_PYTHON="/usr/bin/python3",SUNG_TEST_OUTPUT=str(out/"colour-audit"))
-    stage("colour-audit",[str(build/"sung"),"--isolated","--colour-audit-test"],480,e)
-    if a.offline:
-        rows.append(dict(stage='live-ui-and-audit',status='skipped',detail='--offline selected; streaming and live catalog not verified'))
-    else:
-        py=os.environ.get('SUNG_PYTHON',str(root/'runtime/bin/python'))
-        if not pathlib.Path(py).exists():
-            rows.append(dict(stage='live-runtime',status='fail',detail='Run scripts/setup.sh or set SUNG_PYTHON'))
-        else:
-            e=profile('online-artwork-live-profile');e.update(SUNG_PYTHON=py)
-            stage('online-artwork-live',['python3',str(root/'tests/online_artwork_live.py'),'--output',str(out/'online-artwork-live'),'--binary',str(build/'sung')],1500,e)
-            for name,flag in [('native-features','--features-test'),('live-lyrics-motion','--lyrics-test'),('playback-recovery','--recovery-test'),('ui-playback','--ui-test'),('ui-audit','--audit')]:
-                e=profile(name+'-profile');e.update(SUNG_PYTHON=py,SUNG_HELPER=str(root/'helper/catalog.py'),SUNG_TEST_OUTPUT=str(out/name))
-                stage(name,[str(build/'sung'),'--isolated',flag],480,e)
-            e=profile('hidpi-profile');e.update(SUNG_PYTHON=py,SUNG_HELPER=str(root/'helper/catalog.py'),SUNG_TEST_OUTPUT=str(out/'hidpi'),QT_SCALE_FACTOR='1.6')
-            stage('ui-hidpi',[str(build/'sung'),'--isolated','--ui-test'],480,e)
-    stage('idle-performance',['python3',str(root/'tests/profile.py'),str(build/'sung')],20,profile('performance-profile'))
-    stage('mini-performance',['python3',str(root/'tests/profile.py'),str(build/'sung'),'--mini'],20,profile('mini-performance-profile'))
-    stage('noctalia-preview',[str(build/'sung'),'--isolated','--offline','--screenshot',str(out/'noctalia.png')],15,{**profile('theme-profile'),'SUNG_NOCTALIA_COLORS':os.environ.get('SUNG_NOCTALIA_COLORS',str(pathlib.Path.home()/'.local/share/color-schemes/noctalia.colors'))})
-summary={'created':datetime.datetime.now().astimezone().isoformat(),'offline':a.offline,'passed':all(r['status']!='fail' for r in rows),'stages':rows,'diagnostic_binary_bytes':(build/'sung').stat().st_size if ready else None,'note':'Screenshots require human visual review. Live checks depend on YouTube and the network. Diagnostic binary includes QtTest; measure the Release executable separately.'}
-(out/'report.json').write_text(json.dumps(summary,indent=2)+'\n')
-(out/'report.txt').write_text('\n'.join(f"{r['status'].upper():7} {r['stage']}: {r.get('detail','')}" for r in rows)+'\n')
-print(f'Report: {out}/report.json',flush=True)
-sys.exit(0 if summary['passed'] else 1)
+root=Path(__file__).resolve().parents[1]
+parser=argparse.ArgumentParser()
+parser.add_argument('--build-dir',type=Path,default=root/'build-verification')
+parser.add_argument('--jobs',type=int,default=4)
+parser.add_argument('--offline',action='store_true',help='All verification uses deterministic fixtures; no live account requests are made.')
+args=parser.parse_args()
+out=root/'verification'/'qqmusic-only';out.mkdir(parents=True,exist_ok=True)
+rows=[]
+env=os.environ.copy();env.update(QT_QPA_PLATFORM='offscreen',QT_QPA_PLATFORMTHEME='generic',QT_QUICK_BACKEND='software')
+
+def stage(name,command,timeout=600,environment=env):
+    print(name,flush=True);started=time.monotonic()
+    with (out/(name+'.log')).open('w') as log:
+        result=subprocess.run([str(v) for v in command],cwd=root,env=environment,stdout=log,stderr=subprocess.STDOUT,timeout=timeout)
+    rows.append({'stage':name,'passed':result.returncode==0,'seconds':round(time.monotonic()-started,2)})
+    if result.returncode:
+        print((out/(name+'.log')).read_text()[-6000:],flush=True)
+        raise RuntimeError(name+' failed')
+
+try:
+    stage('configure',['cmake','-S',root,'-B',args.build_dir,'-G','Ninja','-DCMAKE_BUILD_TYPE=Release','-DBUILD_TESTING=ON','-DSUNG_DIAGNOSTICS=ON'])
+    stage('build',['cmake','--build',args.build_dir,'--parallel',args.jobs],900)
+    python=root/'runtime/bin/python'
+    stage('python',[python if python.exists() else sys.executable,'-m','unittest','discover','-s','tests','-p','test_*.py'])
+    stage('native',['ctest','--test-dir',args.build_dir,'--output-on-failure'],900)
+    with tempfile.TemporaryDirectory(prefix='sung-qq-ui-') as temp:
+        ui=env.copy();ui.update(XDG_CONFIG_HOME=temp+'/config',XDG_DATA_HOME=temp+'/data',XDG_CACHE_HOME=temp+'/cache',SUNG_HELPER=str(root/'tests/catalog_fixture.py'),SUNG_PYTHON=sys.executable,SUNG_BUFFER_FIXTURE='1',SUNG_QQ_ACCOUNT_STATE=temp+'/account.json',SUNG_QQ_HOME_FIXTURE='recommendations',SUNG_TEST_OUTPUT=str(out/'screenshots'))
+        stage('ui',['dbus-run-session','--',args.build_dir/'sung','--isolated','--qqmusic-ui-test'],90,ui)
+    passed=True
+except (RuntimeError,subprocess.TimeoutExpired):
+    passed=False
+(out/'summary.json').write_text(json.dumps({'created':datetime.datetime.now(datetime.timezone.utc).isoformat(),'passed':passed,'stages':rows},indent=2))
+print('PASS' if passed else 'FAIL',out,flush=True)
+sys.exit(0 if passed else 1)

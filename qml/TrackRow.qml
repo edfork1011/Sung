@@ -10,7 +10,7 @@ ItemDelegate {
     property var listOwner: null
     property var dragHub: null
     property bool selected: selection ? (selection.revision,selection.contains(selectionIndex)) : false
-    property bool selectable: selection && !!(track.videoId || track.localPath || track.serverSong) && track.available!==false
+    property bool selectable: selection && !!(track.localPath || track.qqMusicSong) && track.available!==false
     property bool keyboardCurrent: activeFocus || (listOwner && listOwner.activeFocus && listOwner.currentIndex===selectionIndex)
     // A mouse press also gives this row active focus. Its title tooltip then
     // follows pointer Enter until focus leaves, instead of reopening on Exit.
@@ -222,7 +222,7 @@ ItemDelegate {
             Layout.preferredWidth: row.leadingSize; Layout.preferredHeight: row.leadingSize
             Icon { objectName: "mixKindIcon"; anchors.centerIn: parent; name: "filter"; size: 24; ink: Theme.primary; visible: row.track.kind==="smart" }
             // Every row leads with its cover, album pages included: a track
-            // number is not always known (YouTube Music sends none), and an
+            // number is not always known (some catalogs omit it), and an
             // empty slot read as missing artwork. RoundedArt's cache decodes
             // an album's shared cover once for all its rows.
             Artwork { objectName: "trackLeadingArtwork"; visible: row.track.kind!=="smart"; anchors.fill: parent; url: row.track.art || ""; radius: Theme.shapeSmall; pixels: 112 }

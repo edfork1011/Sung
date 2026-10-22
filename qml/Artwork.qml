@@ -22,11 +22,7 @@ Item {
     Component.onCompleted: requestedPixels=targetPixels
     Timer {id:resizeDelay;interval:160;onTriggered:root.requestedPixels=root.targetPixels}
     implicitWidth: 56; implicitHeight: 56
-    Connections {
-        target: app.server
-        function onAccountChanged() { if(root.url.startsWith("sungcover:"))art.source="" }
-        function onChanged() { if(root.url.startsWith("sungcover:") && app.server.connected && !art.source.toString())art.source=root.url }
-    }
+
     Rectangle { anchors.fill: parent; visible: !root.shape; radius: root.radius; color: Theme.high }
     MShape { anchors.fill: parent; visible: !!root.shape; shape: root.shape; toShape: root.toShape; progress: root.morph; color: Theme.high }
     Icon { anchors.centerIn: parent; name: "disc"; size: Math.min(48,parent.width*0.4); ink: Theme.muted; visible: !art.ready }

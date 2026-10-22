@@ -68,7 +68,7 @@ private slots:
   }
   void realPlaybackHistoryAndDeduplication() {
     QTest::qWait(100);const int before=server.calls.size();Backend b;b.clearQueue();b.clearHistory();b.setVolume(0);b.setTrackNotifications(true);
-    auto track=[](const QString &id){return QVariantMap{{"id",id},{"videoId",id},{"title",id},{"artist","Fixture artist"},{"kind","song"},{"seconds",8}};};
+    auto track=[](const QString &id){return QVariantMap{{"id",id},{"source","qqmusic"},{"remoteId",id},{"title",id},{"artist","Fixture artist"},{"kind","song"},{"seconds",8}};};
     b.playItem(track("public00001"));b.pause();QTRY_VERIFY(!b.resolving());b.localTestSource(audio);QTRY_VERIFY(b.playing());QTRY_COMPARE(server.calls.size(),before+1);
     b.pause();b.play();QTest::qWait(150);QCOMPARE(server.calls.size(),before+1);
     b.library("history");QCOMPARE(b.results()->count(),1);b.clearHistory();b.setHistoryPaused(true);

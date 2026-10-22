@@ -36,6 +36,14 @@ static QByteArray solid(int width,int height,Qt::GlobalColor color) {
 class ArtworkTest : public QObject {
   Q_OBJECT
 private slots:
+  void qqCoverRequestSizes() {
+    const QUrl cover("https://y.gtimg.cn/music/photo_new/T002R300x300M000albumMID.jpg");
+    QCOMPARE(artworkurl::sized(cover,800).path(),QString("/music/photo_new/T002R800x800M000albumMID.jpg"));
+    QVERIFY(artworkurl::isQQMusic(cover));
+    QVERIFY(!artworkurl::isQQMusic(QUrl("https://qq.com.evil.example/cover.jpg")));
+    QVERIFY(!artworkurl::isQQMusic(QUrl("http://y.gtimg.cn/cover.jpg")));
+  }
+
   void concurrentLocalCoversSharePixels() {
     QTemporaryDir dir;
     const auto path=dir.filePath("shared.png");
@@ -461,7 +469,7 @@ private slots:
     qputenv("XDG_CACHE_HOME",profile.path().toUtf8());
     QNetworkDiskCache disk;
     disk.setCacheDirectory(QStandardPaths::writableLocation(QStandardPaths::CacheLocation)+"/art");
-    const QUrl url("https://sung-test.invalid/shared-cover.png");
+    const QUrl url("https://y.gtimg.cn/music/photo_new/sung-test-shared-cover.png");
     QImage original(400,400,QImage::Format_RGB32);
     for(int y=0;y<400;++y)for(int x=0;x<400;++x)original.setPixel(x,y,qRgb(x%256,y%256,(x+y)%256));
     QByteArray bytes;QBuffer buffer(&bytes);QVERIFY(buffer.open(QIODevice::WriteOnly));QVERIFY(original.save(&buffer,"PNG"));
@@ -497,7 +505,7 @@ private slots:
     views.front()->setSource({});QVERIFY(!views.front()->ready());
     QVERIFY(views.back()->ready());QCOMPARE(views.back()->m_image.convertToFormat(QImage::Format_RGB32),original);
     // Transparency must survive without RGB packing.
-    const QUrl alphaUrl("https://sung-test.invalid/alpha-cover.png");
+    const QUrl alphaUrl("https://y.gtimg.cn/music/photo_new/sung-test-alpha-cover.png");
     QImage alpha(64,64,QImage::Format_ARGB32);
     for(int y=0;y<64;++y)for(int x=0;x<64;++x)alpha.setPixel(x,y,qRgba(x*4,y*4,80,(x+y)*2));
     QByteArray alphaBytes;QBuffer alphaBuffer(&alphaBytes);QVERIFY(alphaBuffer.open(QIODevice::WriteOnly));QVERIFY(alpha.save(&alphaBuffer,"PNG"));
@@ -506,85 +514,8 @@ private slots:
     QVERIFY(transparent.m_image.hasAlphaChannel());QCOMPARE(transparent.m_image.convertToFormat(QImage::Format_ARGB32),alpha);
     RoundedArt::clearCaches();QVERIFY(views.back()->ready());QCOMPARE(views.back()->m_image.convertToFormat(QImage::Format_RGB32),original);
   }
-  void coverRequestSizes() {
-    const QUrl frame("https://i.ytimg.com/vi/abcDEF123_-/hqdefault.jpg?sqp=-oaymwE&rs=AOn4");
-    QCOMPARE(artworkurl::videoId(frame),QString("abcDEF123_-"));
-    QVERIFY(artworkurl::videoId(QUrl("https://i.ytimg.com/vi/short/hqdefault.jpg")).isEmpty());
-    QVERIFY(artworkurl::videoId(QUrl("https://ytimg.com.evil.example/vi/abcDEF123_-/hqdefault.jpg")).isEmpty());
-    QVERIFY(artworkurl::videoId(QUrl("http://i.ytimg.com/vi/abcDEF123_-/hqdefault.jpg")).isEmpty());
-    // A row draws the frame below its own 225 pixels; anything larger asks for the HD frame.
-    QCOMPARE(artworkurl::sized(frame,150),frame);
-    QCOMPARE(artworkurl::sized(frame,384),QUrl("https://i.ytimg.com/vi/abcDEF123_-/maxresdefault.jpg"));
-    const QUrl google("https://yt3.googleusercontent.com/abc=w544-h544-l90-rj");
-    QCOMPARE(artworkurl::sized(google,120),google);
-    QCOMPARE(artworkurl::sized(google,800),QUrl("https://yt3.googleusercontent.com/abc=w800-h800-l90-rj"));
-    QCOMPARE(artworkurl::sized(google,3000),QUrl("https://yt3.googleusercontent.com/abc=w1600-h1600-l90-rj"));
-    const QUrl apple("https://is1-ssl.mzstatic.com/image/thumb/Music/ab/cd/100x100bb.jpg");
-    QVERIFY(artworkurl::isAlbumCover(apple));
-    QCOMPARE(artworkurl::sized(apple,384),QUrl("https://is1-ssl.mzstatic.com/image/thumb/Music/ab/cd/384x384bb.jpg"));
-    for(const auto bad:{"http://is1-ssl.mzstatic.com/image/thumb/x/100x100bb.jpg","https://mzstatic.com.evil.example/image/thumb/x/100x100bb.jpg",
-                        "https://is1-ssl.mzstatic.com/image/thumb/x/100x100bb.jpg?x=1","https://is1-ssl.mzstatic.com/image/thumb/x/cover.jpg","https://user@is1-ssl.mzstatic.com/image/thumb/x/100x100bb.jpg"})
-      QVERIFY2(!artworkurl::isAlbumCover(QUrl(bad)),bad);
-    QCOMPARE(artworkurl::sized(QUrl("https://example.com/cover.jpg"),800),QUrl("https://example.com/cover.jpg"));
-    // The Cover Art Archive keeps three sizes beside the upload itself.
-    const QUrl front("https://coverartarchive.org/release-group/11111111-2222-3333-4444-555555555555/front");
-    QVERIFY(artworkurl::isArchiveCover(front));
-    QVERIFY(artworkurl::isAlbumCover(front));
-    QVERIFY(!artworkurl::isAppleCover(front));
-    QCOMPARE(artworkurl::sized(front,120),QUrl(front.toString()+"-250"));
-    QCOMPARE(artworkurl::sized(front,384),QUrl(front.toString()+"-500"));
-    QCOMPARE(artworkurl::sized(front,800),QUrl(front.toString()+"-1200"));
-    // Past the largest of them the upload is the only bigger picture there is.
-    QCOMPARE(artworkurl::sized(front,1600),front);
-    for(const auto bad:{"http://coverartarchive.org/release-group/11111111-2222-3333-4444-555555555555/front",
-                        "https://coverartarchive.org.evil.example/release-group/11111111-2222-3333-4444-555555555555/front",
-                        "https://coverartarchive.org/release-group/11111111-2222-3333-4444-555555555555/back",
-                        "https://coverartarchive.org/release-group/short/front",
-                        "https://coverartarchive.org/release-group/11111111-2222-3333-4444-555555555555/front?x=1"})
-      QVERIFY2(!artworkurl::isArchiveCover(QUrl(bad)),bad);
-  }
-  void videoFrameLoadsHdFrame() {
-    const QUrl frame("https://i.ytimg.com/vi/frameTest01/hqdefault.jpg?sqp=-oaymwE");
-    seed(QUrl("https://i.ytimg.com/vi/frameTest01/maxresdefault.jpg"),solid(1280,720,Qt::blue));
-    seed(frame,solid(400,225,Qt::red));
-    RoundedArt large;large.setPixels(800);large.setSource(frame);QTRY_VERIFY_WITH_TIMEOUT(large.ready(),5000);
-    QCOMPARE(large.m_image.size(),QSize(800,450));QVERIFY(large.m_image.pixelColor(10,10).blue()>200);
-    RoundedArt row;row.setPixels(150);row.setSource(frame);QTRY_VERIFY_WITH_TIMEOUT(row.ready(),5000);
-    QCOMPARE(row.m_image.size(),QSize(150,84));QVERIFY(row.m_image.pixelColor(10,10).red()>200);
-    // An upload with no HD frame: that request fails and the catalogue's frame is used.
-    const QUrl plain("https://i.ytimg.com/vi/frameTest02/hqdefault.jpg?sqp=-oaymwE");
-    seed(QUrl("https://i.ytimg.com/vi/frameTest02/maxresdefault.jpg"),QByteArray("not an image"),"image/jpeg");
-    seed(plain,solid(400,225,Qt::green));
-    RoundedArt fallback;fallback.setPixels(800);fallback.setSource(plain);QTRY_VERIFY_WITH_TIMEOUT(fallback.ready(),5000);
-    QVERIFY(fallback.m_originalSizeFallback);QVERIFY(fallback.m_image.pixelColor(10,10).green()>200);
-  }
-  void videoFrameResolvesToAlbumCover() {
-    const QUrl frame("https://i.ytimg.com/vi/frameTest03/hqdefault.jpg?sqp=-oaymwE");
-    seed(frame,solid(400,225,Qt::red));seed(QUrl("https://i.ytimg.com/vi/frameTest03/maxresdefault.jpg"),solid(1280,720,Qt::blue));
-    seed(QUrl("https://is1-ssl.mzstatic.com/image/thumb/Test/800x800bb.jpg"),solid(800,800,Qt::green));
-    seed(QUrl("https://coverartarchive.org/release-group/99999999-8888-7777-6666-555555555555/front-1200"),solid(900,900,Qt::yellow));
-    const auto cover=[](const QUrl &url){return artworkurl::videoId(url)=="frameTest03"?QUrl("https://is1-ssl.mzstatic.com/image/thumb/Test/100x100bb.jpg"):QUrl();};
-    RoundedArt::resolveVideoFrame=cover;
-    RoundedArt art;art.setPixels(800);art.setSource(frame);QTRY_VERIFY_WITH_TIMEOUT(art.ready(),5000);
-    QCOMPARE(art.m_image.size(),QSize(800,800));QVERIFY(art.m_image.pixelColor(10,10).green()>200);
-    // What a frame stands for can change after it was drawn: live surfaces fetch again.
-    RoundedArt::resolveVideoFrame=nullptr;RoundedArt::refreshFrames();
-    QTRY_VERIFY_WITH_TIMEOUT(art.ready()&&art.m_image.pixelColor(10,10).blue()>200,5000);QCOMPARE(art.m_image.size(),QSize(800,450));
-    art.setCrossfade(true);RoundedArt::resolveVideoFrame=cover;RoundedArt::refreshFrames();
-    QVERIFY(art.transitioning());QTRY_VERIFY_WITH_TIMEOUT(!art.transitioning(),3000);QVERIFY(art.m_image.pixelColor(10,10).green()>200);
-    RoundedArt other;other.setPixels(800);other.setSource(QUrl("https://sung-test.invalid/plain.png"));
-    RoundedArt::resolveVideoFrame=nullptr;RoundedArt::refreshFrames();QVERIFY(!other.ready());
-    // A frame answered by the archive rather than by Apple draws the same way.
-    RoundedArt::resolveVideoFrame=[](const QUrl &url){return artworkurl::videoId(url)=="frameTest03"
-        ?QUrl("https://coverartarchive.org/release-group/99999999-8888-7777-6666-555555555555/front"):QUrl();};
-    // A size of its own, so this reads the archive rather than the decoded
-    // frame the surfaces above already put in the shared cache.
-    RoundedArt archive;archive.setCrossfade(false);archive.setPixels(900);archive.setSource(frame);
-    QTRY_VERIFY_WITH_TIMEOUT(archive.ready(),5000);
-    QCOMPARE(archive.m_image.size(),QSize(900,900));
-    QVERIFY(archive.m_image.pixelColor(10,10).red()>200&&archive.m_image.pixelColor(10,10).green()>200&&archive.m_image.pixelColor(10,10).blue()<80);
-    RoundedArt::resolveVideoFrame=nullptr;
-  }
+
+
   // The Motion backdrop draws the animation while there is one, the still
   // otherwise, and never an empty view while the next picture is on its way.
   void motionBackdropChoosesAndHoldsItsPicture() {

@@ -70,7 +70,7 @@ public:
   void setVolume(double v) { b->setVolume(v); }
   qlonglong position() const { return b->position() * 1000; }
   bool canControl() const { return b->queue()->count() > 0; }
-  bool canNext() const { return canControl() && (b->currentIndex()+1<b->queue()->count() || b->repeat()==1 || b->shuffle() || (b->autoplay()&&!b->current().value("videoId").toString().isEmpty())); }
+  bool canNext() const { return canControl() && (b->currentIndex()+1<b->queue()->count() || b->repeat()==1 || b->shuffle() || (b->autoplay()&&b->current().value("source")=="qqmusic"&&!b->current().value("remoteId").toString().isEmpty())); }
   bool canPrevious() const { return canControl() && (b->position()>3000 || b->currentIndex()>0 || b->repeat()==1); }
   bool canSeek() const { return b->media()->isSeekable(); }
   bool yes() const { return true; }
@@ -98,4 +98,4 @@ private:
   void changed();
   Backend *b;
 };
-void registerMpris(Backend *);
+bool registerMpris(Backend *, const QString &instance = {});

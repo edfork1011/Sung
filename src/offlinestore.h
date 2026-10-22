@@ -31,11 +31,8 @@ public:
 
   // What a song is filed under, or an empty string for one that is never kept.
   //
-  // An imported file is already on disk and is left alone. Everything else
-  // carries the quality it was fetched at, so lowering the setting cannot
-  // quietly play back the larger file that was kept at the old one, and a
-  // server track carries the server it came from, because two servers' track
-  // ids say nothing about each other.
+  // QQ Music audio uses the provider MID and its authorized MP3 quality.
+  // Local files are already on disk and are never copied into this store.
   static QString keyFor(const QVariantMap &track, const QString &quality);
 
   // Whether a song is held, asked without counting as having played it.

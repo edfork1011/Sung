@@ -4,7 +4,7 @@ import QtQuick.Dialogs
 QtObject {
     id: dialogs
     required property Window ownerWindow
-    readonly property bool visible: m3uExportPicker.visible || m3uImportPicker.visible || playlistCoverPicker.visible || exportPicker.visible || importPicker.visible || cookiePicker.visible || lyricPicker.visible || audioPicker.visible || locatePicker.visible || folderPicker.visible || artworkPicker.visible
+    readonly property bool visible: m3uExportPicker.visible || m3uImportPicker.visible || playlistCoverPicker.visible || exportPicker.visible || importPicker.visible || qqMusicCredentialPicker.visible || lyricPicker.visible || audioPicker.visible || locatePicker.visible || folderPicker.visible || artworkPicker.visible
     function open(kind) {
         if(kind === "playlist-cover") playlistCoverPicker.open();
         else if(kind === "artwork") {artworkPicker.songId=app.current.id || "";artworkPicker.open();}
@@ -16,7 +16,7 @@ QtObject {
         else if(kind === "export") exportPicker.open();
         else if(kind === "import") importPicker.open();
         else if(kind === "lyrics") { lyricPicker.songId=app.current.id || ""; lyricPicker.open(); }
-        else if(kind === "cookies") cookiePicker.open();
+        else if(kind === "qqmusic-credential") qqMusicCredentialPicker.open();
     }
     property FileDialog playlistCoverPicker: FileDialog { parentWindow:dialogs.ownerWindow; title:"Choose playlist cover"; nameFilters:["Images (*.png *.jpg *.jpeg *.webp)"]; onAccepted:dialogs.ownerWindow.previewPlaylistCover(selectedFile) }
     property FileDialog artworkPicker: FileDialog { parentWindow: dialogs.ownerWindow; property string songId; title: "Choose animated cover"; nameFilters: ["Animated covers (*.gif *.webp *.mp4 *.webm)"]; onAccepted: app.chooseArtwork(selectedFile,songId) }
@@ -30,5 +30,5 @@ QtObject {
     property FileDialog exportPicker: FileDialog { parentWindow: dialogs.ownerWindow; objectName: "exportPicker"; title: "Export library"; fileMode: FileDialog.SaveFile; defaultSuffix: "json"; nameFilters: ["Sung library (*.json)"]; onAccepted: app.exportLibrary(selectedFile) }
     property FileDialog importPicker: FileDialog { parentWindow: dialogs.ownerWindow; objectName: "importPicker"; title: "Import library"; nameFilters: ["Sung library (*.json)"]; onAccepted: app.importLibrary(selectedFile) }
     property FileDialog lyricPicker: FileDialog { parentWindow: dialogs.ownerWindow; property string songId; title: "Import lyrics"; nameFilters: ["Timed lyrics (*.lrc)"]; onAccepted: app.importLyrics(selectedFile,songId) }
-    property FileDialog cookiePicker: FileDialog { parentWindow: dialogs.ownerWindow; objectName: "cookiePicker"; title: "Import YouTube cookies"; nameFilters: ["Cookie files (*.txt)"]; onAccepted: app.setCookieFile(selectedFile) }
+    property FileDialog qqMusicCredentialPicker: FileDialog { parentWindow: dialogs.ownerWindow; objectName: "qqMusicCredentialPicker"; title: "Import QQ Music credentials"; nameFilters: ["QQMusicApi credentials (*.json)"]; onAccepted: app.importQQMusicCredential(selectedFile) }
 }

@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=Sung
-Comment=YouTube Music, native on Linux
+Comment=QQ Music and local audio player
 Exec=sung %u
 Icon=sung
 Terminal=false

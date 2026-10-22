@@ -13,7 +13,7 @@ MDialog {
     property string folderError: ""
     property bool folderAdded: false
     signal browseRequested()
-    signal serverRequested()
+    signal qqMusicRequested()
     title: ["Welcome to Sung","Add your music","Where should Sung open?"][step]
     modal: true
     closePolicy: Popup.NoAutoClose
@@ -94,11 +94,11 @@ MDialog {
                 Layout.fillWidth: true; Layout.minimumWidth: 0; spacing: 12
                 MSegmentedControl {
                     accessibleName: "Start page"
-                    options: [{key:"home",label:"Home",name:"onboardStart_home"},{key:"files",label:"Local",name:"onboardStart_files"},{key:"server",label:"Server",name:"onboardStart_server"},{key:"favorites",label:"Liked",name:"onboardStart_favorites"}]
+                    options: [{key:"home",label:"Home",name:"onboardStart_home"},{key:"files",label:"Local",name:"onboardStart_files"},{key:"favorites",label:"Liked",name:"onboardStart_favorites"}]
                     value: app.startPage; onChosen: value=>app.startPage=value
                 }
-                MButton { objectName: "onboardingServer"; Layout.fillWidth: true; Layout.minimumWidth: 0; leftAligned: true; text: "Connect a music server…"; symbol: "library"; onClicked: root.serverRequested() }
-                SungText { Layout.fillWidth: true; Layout.minimumWidth: 0; text: "Subsonic, Navidrome and Jellyfin are supported. You can connect one at any time from Settings."; color: Theme.muted; font.pixelSize: Theme.labelMedium; wrapMode: Text.Wrap }
+                MButton { objectName: "onboardingQQMusic"; Layout.fillWidth: true; Layout.minimumWidth: 0; leftAligned: true; text: "Sign in to QQ Music…"; symbol: "library"; onClicked: root.qqMusicRequested() }
+                SungText { Layout.fillWidth: true; Layout.minimumWidth: 0; text: "Scan a QR code to load your QQ Music liked songs and playlists."; color: Theme.muted; font.pixelSize: Theme.labelMedium; wrapMode: Text.Wrap }
             }
         }
     }

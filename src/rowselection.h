@@ -47,7 +47,7 @@ public:
   }
   Q_INVOKABLE void selectAll() {if(!m_model)return;m_rows.clear();for(int i=0;i<m_model->rowCount();++i)if(eligible(i))m_rows.insert(i);m_anchor=0;announce();}
   Q_INVOKABLE QVariantList items() const {QVariantList result;if(m_model)for(const auto &v:rows())result.append(m_model->data(m_model->index(v.toInt(),0),Qt::UserRole));return result;}
-  Q_INVOKABLE bool eligible(int row) const {if(m_excluded.contains(row)||!m_model||row<0||row>=m_model->rowCount())return false;auto item=m_model->data(m_model->index(row,0),Qt::UserRole).toMap();return (item.value("serverSong").toBool()||!item.value("videoId").toString().isEmpty()||!item.value("localPath").toString().isEmpty())&&item.value("available",true).toBool();}
+  Q_INVOKABLE bool eligible(int row) const {if(m_excluded.contains(row)||!m_model||row<0||row>=m_model->rowCount())return false;auto item=m_model->data(m_model->index(row,0),Qt::UserRole).toMap();return ((item.value("source")=="qqmusic"&&item.value("kind")=="song")||!item.value("localPath").toString().isEmpty())&&item.value("available",true).toBool();}
 signals:
   void changed();
   void modelChanged();

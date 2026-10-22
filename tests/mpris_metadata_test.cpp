@@ -10,6 +10,16 @@
 #include <QImage>
 #include <QTemporaryDir>
 
+class PropertyObserver : public QObject {
+  Q_OBJECT
+public:
+  bool canPlay=false;
+public slots:
+  void changed(const QString &interface,const QVariantMap &values,const QStringList &) {
+    if(interface=="org.mpris.MediaPlayer2.Player" && values.contains("CanPlay"))canPlay=values.value("CanPlay").toBool();
+  }
+};
+
 // Runs under dbus-run-session, so the player registers on a private bus and
 // the metadata travels over real D-Bus the way a shell reads it.
 class MprisMetadataTests : public QObject {
@@ -17,16 +27,18 @@ class MprisMetadataTests : public QObject {
   QTemporaryDir storage;
   QString folder;
   QUrl audio;
-  QVariantMap metadata() {
+  QString service="org.mpris.MediaPlayer2.sung";
+  QVariant properties(const QString &property) {
     // A second connection goes through the bus daemon. The reply needs this
     // thread's event loop, so the call is awaited by spinning it.
     auto client=QDBusConnection::connectToBus(QDBusConnection::SessionBus,"mpris-client");
-    auto get=QDBusMessage::createMethodCall("org.mpris.MediaPlayer2.sung","/org/mpris/MediaPlayer2","org.freedesktop.DBus.Properties","Get");
-    get<<QString("org.mpris.MediaPlayer2.Player")<<QString("Metadata");
+    auto get=QDBusMessage::createMethodCall(service,"/org/mpris/MediaPlayer2","org.freedesktop.DBus.Properties","Get");
+    get<<QString("org.mpris.MediaPlayer2.Player")<<property;
     QDBusPendingCall call=client.asyncCall(get);
     if(!QTest::qWaitFor([&]{return call.isFinished();},5000) || call.isError())return {};
-    return qdbus_cast<QVariantMap>(call.reply().arguments().value(0).value<QDBusVariant>().variant());
+    return call.reply().arguments().value(0).value<QDBusVariant>().variant();
   }
+  QVariantMap metadata() {return qdbus_cast<QVariantMap>(properties("Metadata"));}
 private slots:
   void initTestCase() {
     QVERIFY(storage.isValid());qputenv("XDG_CONFIG_HOME",storage.path().toUtf8());qputenv("XDG_DATA_HOME",storage.path().toUtf8());
@@ -40,7 +52,7 @@ private slots:
   }
   // Each case registers its own player; the name has to be free again.
   void cleanup() {
-    auto bus=QDBusConnection::sessionBus();bus.unregisterObject("/org/mpris/MediaPlayer2");bus.unregisterService("org.mpris.MediaPlayer2.sung");
+    auto bus=QDBusConnection::sessionBus();bus.unregisterObject("/org/mpris/MediaPlayer2");bus.unregisterService(service);service="org.mpris.MediaPlayer2.sung";
   }
   // The poster the importer writes carries ?v=<mtime>:<size>. A shell that
   // makes a path of the URI by cutting the scheme must still find the file.
@@ -60,11 +72,38 @@ private slots:
   // A remote cover goes out as the interface shows it, query included.
   void remoteArtworkKeepsItsQuery() {
     Backend b;b.setVolume(0);b.setAutoplay(false);registerMpris(&b);
-    const QString remote="https://covers.example/abcdefghijk.jpg?size=600";
-    b.playItem({{"id","abcdefghijk"},{"videoId","abcdefghijk"},{"kind","song"},{"title","Song"},{"artist","Artist"},{"album","Album"},{"art",remote}});
+    const QString remote="https://y.gtimg.cn/music/photo_new/fixture.jpg?size=600";
+    b.playItem({{"id","abcdefghijk"},{"source","qqmusic"},{"remoteId","abcdefghijk"},{"kind","song"},{"title","Song"},{"artist","Artist"},{"album","Album"},{"art",remote}});
     const auto art=metadata().value("mpris:artUrl").toString();
     QCOMPARE(art,b.displayArt(b.current()));
     QVERIFY(QUrl(art).hasQuery());
+    b.stop();
+  }
+  void namedInstanceExportsPlaybackAndChangedCapabilities() {
+    service="org.mpris.MediaPlayer2.sung.qqmusic";
+    Backend b;b.clearQueue();b.setVolume(0);b.setAutoplay(false);QVERIFY(registerMpris(&b,"qqmusic"));
+    QCOMPARE(properties("CanPlay").toBool(),false);
+    PropertyObserver observer;
+    auto observerBus=QDBusConnection::connectToBus(QDBusConnection::SessionBus,"mpris-observer");
+    QVERIFY(observerBus.connect(service,"/org/mpris/MediaPlayer2","org.freedesktop.DBus.Properties","PropertiesChanged",&observer,SLOT(changed(QString,QVariantMap,QStringList))));
+    QSignalSpy stateChanges(&b,&Backend::playbackChanged);
+    b.playItem({{"id","local_desktop"},{"kind","song"},{"title","Desktop song"},{"artist","Desktop artist"},{"localPath",audio.toLocalFile()}});
+    QTRY_VERIFY_WITH_TIMEOUT(b.playing(),5000);
+    QCOMPARE(properties("PlaybackStatus").toString(),QString("Playing"));
+    QCOMPARE(properties("CanPlay").toBool(),true);QVERIFY(!stateChanges.isEmpty());QTRY_VERIFY(observer.canPlay);
+    QCOMPARE(metadata().value("xesam:title").toString(),QString("Desktop song"));
+    b.pause();QCOMPARE(properties("PlaybackStatus").toString(),QString("Paused"));
+    b.stop();QCOMPARE(properties("PlaybackStatus").toString(),QString("Stopped"));
+  }
+  void qqMusicMetadataUsesTheQQSongLink() {
+    Backend b;b.setVolume(0);b.setAutoplay(false);registerMpris(&b);
+    const QString cover="https://y.gtimg.cn/music/photo_new/T002R800x800M000albumMID.jpg";
+    b.playItem({{"id","qq_0123"},{"remoteId","songMID"},{"source","qqmusic"},{"kind","song"},{"title","QQ song"},{"artist","QQ artist"},{"art",cover}});
+    const auto data=metadata();
+    QCOMPARE(data.value("xesam:url").toString(),"https://y.qq.com/n/ryqq/songDetail/songMID");
+    QCOMPARE(data.value("xesam:title").toString(),"QQ song");
+    QCOMPARE(data.value("mpris:artUrl").toString(),cover);
+    b.setAutoplay(true);const auto controls=b.findChild<PlayerAdaptor *>();QVERIFY(controls);QVERIFY(controls->canNext());
     b.stop();
   }
 };

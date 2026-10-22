@@ -31,9 +31,6 @@ class ProductFeatureTests(unittest.TestCase):
             for path in ('https://example.invalid/cover.mp4', 'relative.gif', folder + '/missing.mp4'):
                 self.assertEqual(catalog.run({'op': 'choose-artwork', 'path': path, 'artDirectory': folder})['motionArt'], '')
 
-    def test_disc_metadata_preserved(self):
-        row = catalog.normalize({'videoId': 'fixture', 'discNumber': 2, 'title': 'Second disc'})
-        self.assertEqual(row['discNumber'], 2)
 
     def test_local_album_tags(self):
         import json

@@ -1,2 +1,1 @@
-ytmusicapi==1.12.3
-yt-dlp[default]==2026.8.19
+qqmusic-api-python==0.8.2

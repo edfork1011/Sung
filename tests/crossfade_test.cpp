@@ -43,10 +43,10 @@ class CrossfadeTest : public QObject {
   std::unique_ptr<Backend> loaded(Backend **out = nullptr) {
     auto b = std::make_unique<Backend>();
     b->setVolume(0.8);
-    b->setLyricsFallback(false);
+
     b->setAutoplay(false);
     b->setWatchMusicFolders(false);
-    b->setOnlineArtwork(false);
+
     b->setPrepareNext(false);
     b->clearQueue();
     QVariantList urls;
@@ -84,13 +84,13 @@ private slots:
   // Standard streaming quality takes Opus in a WebM container, where this used
   // to take AAC in MP4. Decoding it is one thing; reporting a length and
   // seeking inside it are what the rest of the player needs, and WebM carries
-  // its timing differently from MP4. A buffered YouTube song is played from
+  // its timing differently from MP4. A buffered QQ Music song is played from
   // the file the helper wrote, which is what this drives.
   void opusInWebmPlaysAndSeeks() {
     QVERIFY(encode("stream one.webm", "Stream one", 8, 440));
     Backend b;
-    b.setVolume(0.8);b.setLyricsFallback(false);b.setAutoplay(false);b.setWatchMusicFolders(false);
-    b.setOnlineArtwork(false);b.setPrepareNext(false);b.clearQueue();
+    b.setVolume(0.8);b.setAutoplay(false);b.setWatchMusicFolders(false);
+    b.setPrepareNext(false);b.clearQueue();
     b.localTestSource(QUrl::fromLocalFile(music.filePath("stream one.webm")));
     QTRY_VERIFY_WITH_TIMEOUT(b.playing() && b.position() > 800, 15000);
     QVERIFY2(b.duration() > 6000, qPrintable(QString("duration %1").arg(b.duration())));
@@ -389,10 +389,10 @@ private slots:
   void theMetersFollowTheSwap() {
     auto b = std::make_unique<Backend>();
     b->setVolume(0.5);
-    b->setLyricsFallback(false);
+
     b->setAutoplay(false);
     b->setWatchMusicFolders(false);
-    b->setOnlineArtwork(false);
+
     b->setPrepareNext(false);
     b->setMotion(true);
     b->setUiActive(true);
@@ -475,13 +475,13 @@ private slots:
     QVERIFY2(!Backend::sameAlbum(side, someoneElse), "two artists' records of one name stay apart");
     QVERIFY2(!Backend::sameAlbum(looseOne, looseTwo), "untagged files are not a record");
 
-    const QVariantMap track{{"albumId", "MPREb_one"}, {"source", "youtube"}};
-    const QVariantMap sameRecord{{"albumId", "MPREb_one"}, {"source", "youtube"}};
-    const QVariantMap another{{"albumId", "MPREb_two"}, {"source", "youtube"}};
-    const QVariantMap onAServer{{"albumId", "MPREb_one"}, {"source", "subsonic"}, {"server", "https://s"}};
+    const QVariantMap track{{"albumId", "MPREb_one"}, {"source", "qqmusic"}};
+    const QVariantMap sameRecord{{"albumId", "MPREb_one"}, {"source", "qqmusic"}};
+    const QVariantMap another{{"albumId", "MPREb_two"}, {"source", "qqmusic"}};
+    const QVariantMap localAlbum{{"albumId", "MPREb_one"}, {"source", "local"}};
     QVERIFY(Backend::sameAlbum(track, sameRecord));
     QVERIFY(!Backend::sameAlbum(track, another));
-    QVERIFY2(!Backend::sameAlbum(track, onAServer), "one id on two services is not one record");
+    QVERIFY2(!Backend::sameAlbum(track, localAlbum), "one id on two services is not one record");
     QVERIFY2(!Backend::sameAlbum(side, track), "a file and a catalogue track are never paired");
   }
 
@@ -490,10 +490,10 @@ private slots:
   void oneAlbumIsHandedOverRatherThanBlended() {
     auto b = std::make_unique<Backend>();
     b->setVolume(0.8);
-    b->setLyricsFallback(false);
+
     b->setAutoplay(false);
     b->setWatchMusicFolders(false);
-    b->setOnlineArtwork(false);
+
     b->setPrepareNext(false);
     b->setRepeat(0);
     b->setShuffle(false);

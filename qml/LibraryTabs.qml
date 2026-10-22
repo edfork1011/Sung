@@ -30,8 +30,7 @@ Flickable {
         {label:"Playlists", key:"playlists", name:"playlistsTab"},
         {label:"Local files", key:"files", name:"localFilesTab"},
         {label:"Mixes", key:"mixes", name:"mixesTab"},
-        {label:"History", key:"history", name:"historyTab"},
-        {label:"Music server", key:"server", name:"serverTab"}
+        {label:"History", key:"history", name:"historyTab"}
     ]
     // Both variants are 48dp tall (Primary/SecondaryNavigationTabTokens
     // .ContainerHeight); the secondary one differs in its indicator, not its
